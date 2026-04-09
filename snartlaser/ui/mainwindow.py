@@ -601,7 +601,7 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Unsaved Changes",
-            "There are unsaved changes.  Discard and continue?",
+            "There are unsaved changes. Discard and continue?",
             QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
         )
         return reply == QMessageBox.StandardButton.Discard

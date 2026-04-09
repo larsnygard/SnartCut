@@ -112,14 +112,16 @@ def _path_from_d(d: str) -> QPainterPath:
             if cmd in ("M", "m"):
                 x, y = next_val(), next_val()
                 if cmd == "m":
-                    x += cx; y += cy
+                    x += cx
+                    y += cy
                 path.moveTo(x, y)
                 cx, cy = x, y
                 cmd = "L" if cmd == "M" else "l"
             elif cmd in ("L", "l"):
                 x, y = next_val(), next_val()
                 if cmd == "l":
-                    x += cx; y += cy
+                    x += cx
+                    y += cy
                 path.lineTo(x, y)
                 cx, cy = x, y
             elif cmd in ("H", "h"):
@@ -141,9 +143,12 @@ def _path_from_d(d: str) -> QPainterPath:
                 x2, y2 = next_val(), next_val()
                 x, y = next_val(), next_val()
                 if cmd == "c":
-                    x1 += cx; y1 += cy
-                    x2 += cx; y2 += cy
-                    x += cx; y += cy
+                    x1 += cx
+                    y1 += cy
+                    x2 += cx
+                    y2 += cy
+                    x += cx
+                    y += cy
                 last_cp = (x2, y2)
                 path.cubicTo(x1, y1, x2, y2, x, y)
                 cx, cy = x, y
@@ -151,8 +156,10 @@ def _path_from_d(d: str) -> QPainterPath:
                 x2, y2 = next_val(), next_val()
                 x, y = next_val(), next_val()
                 if cmd == "s":
-                    x2 += cx; y2 += cy
-                    x += cx; y += cy
+                    x2 += cx
+                    y2 += cy
+                    x += cx
+                    y += cy
                 if last_cp:
                     x1 = 2 * cx - last_cp[0]
                     y1 = 2 * cy - last_cp[1]
@@ -165,15 +172,18 @@ def _path_from_d(d: str) -> QPainterPath:
                 x1, y1 = next_val(), next_val()
                 x, y = next_val(), next_val()
                 if cmd == "q":
-                    x1 += cx; y1 += cy
-                    x += cx; y += cy
+                    x1 += cx
+                    y1 += cy
+                    x += cx
+                    y += cy
                 last_cp = (x1, y1)
                 path.quadTo(x1, y1, x, y)
                 cx, cy = x, y
             elif cmd in ("T", "t"):
                 x, y = next_val(), next_val()
                 if cmd == "t":
-                    x += cx; y += cy
+                    x += cx
+                    y += cy
                 if last_cp:
                     x1 = 2 * cx - last_cp[0]
                     y1 = 2 * cy - last_cp[1]

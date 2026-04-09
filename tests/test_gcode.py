@@ -45,7 +45,11 @@ def test_gcode_fill_mode(qapp):
     lines = gen.generate([([path], cs)])
 
     joined = "\n".join(lines)
-    assert "raster fill" in joined.lower() or "M3 S" in joined
+    # Raster fill should have: laser on, multiple horizontal G1 moves, laser off marker
+    assert "raster fill" in joined.lower()
+    assert "raster end" in joined.lower()
+    # Must have actual cut moves for the fill
+    assert "G1 " in joined
 
 
 def test_gcode_multipass(qapp):
