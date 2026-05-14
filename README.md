@@ -4,7 +4,7 @@
 
 SnartLaser is a cross-platform desktop application inspired by LightBurn.
 It runs **natively on Linux** (and also on Windows and macOS) and is licensed
-under the permissive MIT license.
+under GPL3.
 
 ---
 
