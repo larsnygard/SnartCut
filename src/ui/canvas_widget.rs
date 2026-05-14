@@ -1,6 +1,8 @@
 //! Iced canvas widget – renders the design scene and dispatches drawing tool
 //! interactions.
 
+use std::cell::Cell;
+
 use iced::widget::canvas::{self, Cache, Frame, Geometry, Path, Stroke};
 use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 
@@ -18,6 +20,8 @@ pub struct CanvasState {
     pub scene_cache: Cache,
     /// Cache for the grid (invalidated when workspace size or zoom changes).
     pub grid_cache: Cache,
+    /// Last canvas_revision seen – used to detect out-of-band changes.
+    pub last_revision: Cell<u64>,
 }
 
 /// The canvas program handed to `iced::widget::Canvas`.
@@ -35,6 +39,9 @@ pub struct DesignCanvas<'a> {
     pub show_grid: bool,
     pub grid_spacing: f64,
     pub visual: &'a VisualConfig,
+    /// Monotonically-increasing counter; bump it in the app whenever anything
+    /// that affects the grid/background changes (zoom, pan, workspace dims).
+    pub canvas_revision: u64,
 }
 
 impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
@@ -48,6 +55,14 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
+        // Clear both caches whenever the app bumps the revision counter
+        // (zoom, pan, workspace-size changes that originate outside the canvas).
+        if state.last_revision.get() != self.canvas_revision {
+            state.grid_cache.clear();
+            state.scene_cache.clear();
+            state.last_revision.set(self.canvas_revision);
+        }
+
         // ---- Grid / workspace background ----
         let grid = state.grid_cache.draw(renderer, bounds.size(), |frame| {
             self.draw_workspace_background(frame);
@@ -72,6 +87,15 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> (canvas::event::Status, Option<Message>) {
+        // Stop middle-mouse pan on button release even when cursor leaves bounds.
+        if let canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Middle)) = &event {
+            if matches!(state.tool_state, ToolState::Panning { .. }) {
+                state.tool_state = ToolState::Idle;
+                state.grid_cache.clear();
+            }
+            return (canvas::event::Status::Captured, None);
+        }
+
         let pos = match cursor.position_in(bounds) {
             Some(p) => p,
             None => return (canvas::event::Status::Ignored, None),
@@ -82,16 +106,19 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let msg = self.handle_left_press(state, scene_pos);
                 state.scene_cache.clear();
+                state.grid_cache.clear();
                 (canvas::event::Status::Captured, msg)
             }
             canvas::Event::Mouse(mouse::Event::CursorMoved { position: _ }) => {
                 let msg = self.handle_mouse_move(state, scene_pos);
                 state.scene_cache.clear();
+                state.grid_cache.clear();
                 (canvas::event::Status::Captured, msg)
             }
             canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 let msg = self.handle_left_release(state, scene_pos);
                 state.scene_cache.clear();
+                state.grid_cache.clear();
                 (canvas::event::Status::Captured, msg)
             }
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
@@ -99,6 +126,18 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
                 state.tool_state = ToolState::Idle;
                 state.scene_cache.clear();
                 (canvas::event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) => {
+                // Middle-mouse drag always pans, regardless of active tool.
+                state.tool_state = ToolState::Panning { last_x: scene_pos.0, last_y: scene_pos.1 };
+                (canvas::event::Status::Captured, None)
+            }
+            canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+                let dy = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / 20.0,
+                };
+                (canvas::event::Status::Captured, Some(Message::ScrollCanvas(dy, pos.x, pos.y)))
             }
             _ => (canvas::event::Status::Ignored, None),
         }
@@ -111,9 +150,8 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
         _cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         match (&self.active_tool, &state.tool_state) {
-            (ToolType::Pan, _) | (_, ToolState::Panning { .. }) => {
-                mouse::Interaction::Grab
-            }
+            (_, ToolState::Panning { .. }) => mouse::Interaction::Grabbing,
+            (ToolType::Pan, _) => mouse::Interaction::Grab,
             (ToolType::Select, _) => mouse::Interaction::default(),
             _ => mouse::Interaction::Crosshair,
         }

@@ -10,7 +10,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
 
 use crate::canvas::scene::Scene;
-use crate::core::config::Config;
+use crate::core::config::{BindingId, Config, DeviceProfile, ScrollAction};
 use crate::core::types::{DeviceType, PathData, ToolType};
 use crate::device::base::{DeviceCommand, DeviceEvent};
 use crate::formats::{dxf, svg};
@@ -20,7 +20,7 @@ use crate::ui::canvas_widget::DesignCanvas;
 use crate::ui::device_panel;
 use crate::ui::dialogs::device_settings::{DeviceSettingsState, device_settings_view};
 use crate::ui::dialogs::material_library::material_library_view;
-use crate::ui::dialogs::preferences::preferences_view;
+use crate::ui::dialogs::preferences::{preferences_view, PrefTab, PreferencesState};
 use crate::ui::job_panel;
 use crate::ui::layers_panel;
 use crate::ui::ruler;
@@ -48,6 +48,9 @@ pub enum Message {
 
     // ---- Canvas ----
     ToolSelected(ToolType),
+    KeyPressed(iced::keyboard::Key),
+    KeyReleased(iced::keyboard::Key),
+    ScrollCanvas(f32, f32, f32),  // delta, cursor_x, cursor_y
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -96,6 +99,12 @@ pub enum Message {
     DevicePortChanged(String),
     DeviceBaudChanged(u32),
     DeviceTypeChanged(DeviceType),
+    DeviceProfileSelected(usize),
+    DeviceProfileNew,
+    DeviceProfileNameChanged(String),
+    DeviceProfileDelete,
+    DeviceProfileWorkAreaW(f64),
+    DeviceProfileWorkAreaH(f64),
     DeviceSettingsOk,
     OpenMaterialLibrary,
     MaterialPresetSelected(String),
@@ -105,6 +114,10 @@ pub enum Message {
 
     // ---- Preferences ----
     OpenPreferences,
+    PrefTabSelected(PrefTab),
+    PrefBeginRebind(BindingId),
+    PrefClearBinding(BindingId),
+    PrefScrollChanged(ScrollAction),
     PrefCanvasBgChanged(String),
     PrefWorkspaceBgChanged(String),
     PrefGridColorChanged(String),
@@ -134,7 +147,7 @@ pub enum MenuId {
 pub enum Modal {
     DeviceSettings(DeviceSettingsState),
     MaterialLibrary { selected: Option<String> },
-    Preferences,
+    Preferences(PreferencesState),
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +186,8 @@ pub struct SnartCutApp {
     pub job_progress: Option<u8>,
     pub device_log: Vec<String>,
 
+    pub pre_space_tool: Option<ToolType>,
+    pub canvas_revision: u64,
     pub modal: Option<Modal>,
     pub open_menu: Option<MenuId>,
     pub current_file: Option<PathBuf>,
@@ -208,6 +223,8 @@ impl SnartCutApp {
                 device_position: (0.0, 0.0),
                 job_progress: None,
                 device_log: Vec::new(),
+                pre_space_tool: None,
+                canvas_revision: 0,
                 modal: None,
                 open_menu: None,
                 current_file: None,
@@ -389,20 +406,107 @@ impl SnartCutApp {
                 self.active_tool = t;
             }
 
+            Message::KeyPressed(key) => {
+                // While preferences dialog is open and capturing a rebind, grab next key.
+                if let Some(Modal::Preferences(ref mut s)) = self.modal {
+                    if s.capturing.is_some() {
+                        use iced::keyboard::key::Named;
+                        let s_str = key_to_string(&key);
+                        // Escape cancels; modifiers are ignored; any other key sets the binding.
+                        match &key {
+                            iced::keyboard::Key::Named(Named::Escape) => {
+                                s.capturing = None;
+                            }
+                            _ if s_str.is_empty() => {} // unidentified / modifier-only
+                            _ => {
+                                let id = s.capturing.take().unwrap();
+                                self.config.bindings.set(id, s_str);
+                            }
+                        }
+                        return Task::none();
+                    }
+                }
+                // Don't fire shortcuts while any modal is open.
+                if self.modal.is_some() {
+                    return Task::none();
+                }
+                let b = self.config.bindings.clone();
+                if key_matches(&key, &b.temp_pan) {
+                    if self.pre_space_tool.is_none() {
+                        self.pre_space_tool = Some(self.active_tool);
+                        self.active_tool = ToolType::Pan;
+                    }
+                } else if key_matches(&key, &b.tool_select) {
+                    self.active_tool = ToolType::Select;
+                } else if key_matches(&key, &b.tool_pan) {
+                    self.active_tool = ToolType::Pan;
+                } else if key_matches(&key, &b.tool_rect) {
+                    self.active_tool = ToolType::Rectangle;
+                } else if key_matches(&key, &b.tool_ellipse) {
+                    self.active_tool = ToolType::Ellipse;
+                } else if key_matches(&key, &b.tool_line) {
+                    self.active_tool = ToolType::Line;
+                } else if key_matches(&key, &b.tool_polyline) {
+                    self.active_tool = ToolType::Polyline;
+                } else if key_matches(&key, &b.delete_selected) {
+                    return Task::done(Message::DeleteSelected);
+                } else if key_matches(&key, &b.zoom_in) {
+                    self.zoom = (self.zoom * 1.25).min(50.0);
+                    self.canvas_revision += 1;
+                } else if key_matches(&key, &b.zoom_out) {
+                    self.zoom = (self.zoom / 1.25).max(0.05);
+                    self.canvas_revision += 1;
+                } else if key_matches(&key, &b.zoom_reset) {
+                    self.zoom = 1.5;
+                    self.pan = Vector::new(20.0, 20.0);
+                    self.canvas_revision += 1;
+                }
+            }
+
+            Message::KeyReleased(key) => {
+                if key_matches(&key, &self.config.bindings.temp_pan) {
+                    if let Some(prev) = self.pre_space_tool.take() {
+                        self.active_tool = prev;
+                    }
+                }
+            }
+
+            Message::ScrollCanvas(dy, cx, cy) => {
+                match self.config.mouse_bindings.scroll {
+                    ScrollAction::Zoom => {
+                        let factor = if dy > 0.0 { 1.12f32 } else { 1.0 / 1.12 };
+                        let old_zoom = self.zoom;
+                        let new_zoom = (old_zoom * factor).clamp(0.05, 50.0);
+                        let ratio = new_zoom / old_zoom;
+                        self.pan.x = cx - (cx - self.pan.x) * ratio;
+                        self.pan.y = cy - (cy - self.pan.y) * ratio;
+                        self.zoom = new_zoom;
+                    }
+                    ScrollAction::PanVertical => {
+                        self.pan.y += dy * 30.0;
+                    }
+                }
+                self.canvas_revision += 1;
+            }
+
             Message::ZoomIn => {
                 self.zoom = (self.zoom * 1.25).min(50.0);
+                self.canvas_revision += 1;
             }
             Message::ZoomOut => {
                 self.zoom = (self.zoom / 1.25).max(0.05);
+                self.canvas_revision += 1;
             }
             Message::ZoomReset => {
                 self.zoom = 1.5;
                 self.pan = Vector::new(20.0, 20.0);
+                self.canvas_revision += 1;
             }
 
             Message::PanCanvas(dx, dy) => {
                 self.pan.x += dx;
                 self.pan.y += dy;
+                self.canvas_revision += 1;
             }
 
             Message::CursorMoved(x, y) => {
@@ -500,10 +604,12 @@ impl SnartCutApp {
             Message::WorkspaceWidthChanged(v) => {
                 self.job.workspace.width_mm = v;
                 self.config.workspace.width_mm = v;
+                self.canvas_revision += 1;
             }
             Message::WorkspaceHeightChanged(v) => {
                 self.job.workspace.height_mm = v;
                 self.config.workspace.height_mm = v;
+                self.canvas_revision += 1;
             }
             Message::MaterialNoteChanged(v) => self.job.material = v,
             Message::JobNotesChanged(v) => self.job.notes = v,
@@ -511,13 +617,12 @@ impl SnartCutApp {
 
             // ---- Device ----
             Message::ConnectDevice => {
-                let (cmd_tx, event_rx) = match self.config.device.device_type {
+                let profile = self.config.device.active().clone();
+                let (cmd_tx, event_rx) = match profile.device_type {
                     DeviceType::VinylCutter => crate::device::vinyl::spawn(),
                     _ => crate::device::grbl::spawn(),
                 };
-                let port = self.config.device.port.clone();
-                let baud = self.config.device.baud_rate;
-                let _ = cmd_tx.try_send(DeviceCommand::Connect { port, baud_rate: baud });
+                let _ = cmd_tx.try_send(DeviceCommand::Connect { port: profile.port, baud_rate: profile.baud_rate });
                 self.device_cmd_tx = Some(cmd_tx);
                 self.device_event_rx = Some(event_rx);
             }
@@ -612,21 +717,101 @@ impl SnartCutApp {
                 if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
                     s.port = port.clone();
                 }
-                self.config.device.port = port;
+                self.config.device.active_mut().port = port;
             }
 
             Message::DeviceBaudChanged(baud) => {
                 if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
                     s.baud_rate = baud.to_string();
                 }
-                self.config.device.baud_rate = baud;
+                self.config.device.active_mut().baud_rate = baud;
             }
 
             Message::DeviceTypeChanged(dt) => {
                 if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
                     s.device_type = dt;
                 }
-                self.config.device.device_type = dt;
+                self.config.device.active_mut().device_type = dt;
+            }
+
+            Message::DeviceProfileSelected(idx) => {
+                if idx < self.config.device.profiles.len() {
+                    self.config.device.active_profile = idx;
+                    // Apply the profile's work area
+                    let (w, h) = {
+                        let p = self.config.device.active();
+                        (p.work_area_w, p.work_area_h)
+                    };
+                    self.job.workspace.width_mm = w;
+                    self.job.workspace.height_mm = h;
+                    self.config.workspace.width_mm = w;
+                    self.config.workspace.height_mm = h;
+                    self.canvas_revision += 1;
+                    // Refresh the dialog state if it's open
+                    if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                        *s = DeviceSettingsState::from_config(&self.config.device);
+                    }
+                    self.config.save();
+                }
+            }
+
+            Message::DeviceProfileNew => {
+                let n = self.config.device.profiles.len() + 1;
+                self.config.device.profiles.push(DeviceProfile {
+                    name: format!("Profile {n}"),
+                    port: String::new(),
+                    baud_rate: 115200,
+                    device_type: DeviceType::GrblLaser,
+                    work_area_w: 400.0,
+                    work_area_h: 400.0,
+                });
+                self.config.device.active_profile = self.config.device.profiles.len() - 1;
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    *s = DeviceSettingsState::from_config(&self.config.device);
+                }
+                self.config.save();
+            }
+
+            Message::DeviceProfileNameChanged(name) => {
+                self.config.device.active_mut().name = name.clone();
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.profile_name = name;
+                }
+            }
+
+            Message::DeviceProfileWorkAreaW(v) => {
+                let v = v.max(1.0);
+                self.config.device.active_mut().work_area_w = v;
+                self.job.workspace.width_mm = v;
+                self.config.workspace.width_mm = v;
+                self.canvas_revision += 1;
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.work_area_w = format!("{v:.1}");
+                }
+            }
+
+            Message::DeviceProfileWorkAreaH(v) => {
+                let v = v.max(1.0);
+                self.config.device.active_mut().work_area_h = v;
+                self.job.workspace.height_mm = v;
+                self.config.workspace.height_mm = v;
+                self.canvas_revision += 1;
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.work_area_h = format!("{v:.1}");
+                }
+            }
+
+            Message::DeviceProfileDelete => {
+                if self.config.device.profiles.len() > 1 {
+                    let idx = self.config.device.active_profile;
+                    self.config.device.profiles.remove(idx);
+                    self.config.device.active_profile =
+                        idx.min(self.config.device.profiles.len() - 1);
+                    if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                        *s = DeviceSettingsState::from_config(&self.config.device);
+                    }
+                    self.config.save();
+                }
             }
 
             Message::DeviceSettingsOk => {
@@ -669,7 +854,24 @@ impl SnartCutApp {
 
             // ---- Preferences ----
             Message::OpenPreferences => {
-                self.modal = Some(Modal::Preferences);
+                self.modal = Some(Modal::Preferences(PreferencesState::default()));
+            }
+            Message::PrefTabSelected(tab) => {
+                if let Some(Modal::Preferences(ref mut s)) = self.modal {
+                    s.tab = tab;
+                    s.capturing = None;
+                }
+            }
+            Message::PrefBeginRebind(id) => {
+                if let Some(Modal::Preferences(ref mut s)) = self.modal {
+                    s.capturing = Some(id);
+                }
+            }
+            Message::PrefClearBinding(id) => {
+                self.config.bindings.set(id, String::new());
+            }
+            Message::PrefScrollChanged(action) => {
+                self.config.mouse_bindings.scroll = action;
             }
             Message::PrefCanvasBgChanged(v)       => self.config.visual.canvas_bg = v,
             Message::PrefWorkspaceBgChanged(v)    => self.config.visual.workspace_bg = v,
@@ -763,7 +965,13 @@ impl SnartCutApp {
                 Modal::MaterialLibrary { selected } => {
                     material_library_view(selected.as_deref())
                 }
-                Modal::Preferences => preferences_view(&self.config.visual),
+                Modal::Preferences(state) => preferences_view(
+                    state.tab,
+                    state.capturing,
+                    &self.config.visual,
+                    &self.config.bindings,
+                    &self.config.mouse_bindings,
+                ),
             };
             // Dim backdrop
             let backdrop = button(iced::widget::Space::new(Length::Fill, Length::Fill))
@@ -805,6 +1013,7 @@ impl SnartCutApp {
             show_grid: self.job.workspace.show_grid,
             grid_spacing: self.job.workspace.grid_spacing_mm,
             visual: &self.config.visual,
+            canvas_revision: self.canvas_revision,
         })
         .width(Length::Fill)
         .height(Length::Fill);
@@ -1055,9 +1264,11 @@ impl SnartCutApp {
     // ------------------------------------------------------------------
 
     pub fn subscription(&self) -> Subscription<Message> {
-        // Device event polling is handled via Task::perform in ConnectDevice.
-        // No persistent subscription needed for now.
-        Subscription::none()
+        use iced::keyboard;
+        Subscription::batch([
+            keyboard::on_key_press(|key, _mods| Some(Message::KeyPressed(key))),
+            keyboard::on_key_release(|key, _mods| Some(Message::KeyReleased(key))),
+        ])
     }
 
     pub fn theme(&self) -> Theme {
@@ -1095,7 +1306,7 @@ impl SnartCutApp {
 
     fn build_job_lines(&self) -> Vec<String> {
         let gen = GCodeGenerator::new(
-            self.config.device.device_type,
+            self.config.device.active().device_type,
             self.job.workspace.height_mm,
         );
 
@@ -1134,6 +1345,56 @@ impl SnartCutApp {
             Err(e) => self.status = format!("Export error: {e}"),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Key binding helpers
+// ---------------------------------------------------------------------------
+
+/// Convert an iced keyboard key to the canonical display/config string.
+/// Returns an empty string for modifier keys and unidentified keys.
+fn key_to_string(key: &iced::keyboard::Key) -> String {
+    use iced::keyboard::key::Named;
+    match key {
+        iced::keyboard::Key::Named(named) => match named {
+            // Modifiers — not usable as standalone bindings
+            Named::Shift | Named::Control | Named::Alt | Named::Super => String::new(),
+            Named::CapsLock | Named::NumLock | Named::ScrollLock     => String::new(),
+            // Named keys
+            Named::Space     => "Space".to_owned(),
+            Named::Delete    => "Delete".to_owned(),
+            Named::Backspace => "Backspace".to_owned(),
+            Named::Enter     => "Enter".to_owned(),
+            Named::Tab       => "Tab".to_owned(),
+            Named::Escape    => "Escape".to_owned(),
+            Named::ArrowUp    => "ArrowUp".to_owned(),
+            Named::ArrowDown  => "ArrowDown".to_owned(),
+            Named::ArrowLeft  => "ArrowLeft".to_owned(),
+            Named::ArrowRight => "ArrowRight".to_owned(),
+            Named::Home      => "Home".to_owned(),
+            Named::End       => "End".to_owned(),
+            Named::PageUp    => "PageUp".to_owned(),
+            Named::PageDown  => "PageDown".to_owned(),
+            Named::Insert    => "Insert".to_owned(),
+            Named::F1  => "F1".to_owned(),  Named::F2  => "F2".to_owned(),
+            Named::F3  => "F3".to_owned(),  Named::F4  => "F4".to_owned(),
+            Named::F5  => "F5".to_owned(),  Named::F6  => "F6".to_owned(),
+            Named::F7  => "F7".to_owned(),  Named::F8  => "F8".to_owned(),
+            Named::F9  => "F9".to_owned(),  Named::F10 => "F10".to_owned(),
+            Named::F11 => "F11".to_owned(), Named::F12 => "F12".to_owned(),
+            other      => format!("{other:?}"),
+        },
+        iced::keyboard::Key::Character(c) => c.to_string(),
+        iced::keyboard::Key::Unidentified  => String::new(),
+    }
+}
+
+/// Return `true` if `key` matches the given binding string (case-insensitive).
+fn key_matches(key: &iced::keyboard::Key, binding: &str) -> bool {
+    if binding.is_empty() {
+        return false;
+    }
+    key_to_string(key).eq_ignore_ascii_case(binding)
 }
 
 // ---------------------------------------------------------------------------

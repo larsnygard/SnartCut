@@ -1,13 +1,13 @@
 //! Device panel – connection, position readout, jog controls, job control.
 
-use iced::widget::{button, column, container, progress_bar, row, scrollable, text};
+use iced::widget::{button, column, container, pick_list, progress_bar, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length};
 
 use crate::app::Message;
 use crate::core::config::Config;
 
 pub fn device_view<'a>(
-    _config: &'a Config,
+    config: &'a Config,
     connected: bool,
     position: (f64, f64),
     job_progress: Option<u8>,
@@ -32,6 +32,35 @@ pub fn device_view<'a>(
             .width(Length::Fixed(50.0))
     };
 
+    // Profile selector row
+    let profile_names: Vec<String> =
+        config.device.profiles.iter().map(|p| p.name.clone()).collect();
+    let active_profile_name = profile_names
+        .get(config.device.active_profile)
+        .cloned();
+    let profile_row = row![
+        text("Profile:").size(12).style(|_: &iced::Theme| text::Style {
+            color: Some(Color::from_rgb(0.7, 0.7, 0.7)),
+        }),
+        pick_list(profile_names, active_profile_name, |chosen: String| {
+            Message::DeviceProfileSelected(
+                config.device.profiles.iter().position(|p| p.name == chosen).unwrap_or(0),
+            )
+        })
+        .text_size(12)
+        .width(Length::Fixed(120.0)),
+        button(text("Settings…").size(12))
+            .on_press(Message::OpenDeviceSettings)
+            .style(|_t, _s| button::Style {
+                background: Some(iced::Background::Color(Color::from_rgb(0.25, 0.25, 0.25))),
+                text_color: Color::WHITE,
+                border: iced::Border { radius: 3.0.into(), ..Default::default() },
+                ..Default::default()
+            }),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+
     // Connection row
     let conn_row = row![
         text(status_text)
@@ -45,14 +74,6 @@ pub fn device_view<'a>(
             } else {
                 Message::ConnectDevice
             })
-            .style(|_t, _s| button::Style {
-                background: Some(iced::Background::Color(Color::from_rgb(0.25, 0.25, 0.25))),
-                text_color: Color::WHITE,
-                border: iced::Border { radius: 3.0.into(), ..Default::default() },
-                ..Default::default()
-            }),
-        button(text("Settings…").size(12))
-            .on_press(Message::OpenDeviceSettings)
             .style(|_t, _s| button::Style {
                 background: Some(iced::Background::Color(Color::from_rgb(0.25, 0.25, 0.25))),
                 text_color: Color::WHITE,
@@ -165,6 +186,7 @@ pub fn device_view<'a>(
     );
 
     let mut main_col = column![
+        profile_row,
         conn_row,
         pos_row,
         jog_row,
