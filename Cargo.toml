@@ -1,0 +1,28 @@
+[package]
+name = "snart-laser"
+version = "0.1.0"
+edition = "2021"
+description = "Vinyl and laser design and cut program"
+
+[[bin]]
+name = "snart-laser"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.13", features = ["canvas", "tokio", "advanced"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+serialport = "4"
+uuid = { version = "1", features = ["v4", "serde"] }
+dirs = "5"
+usvg = "0.44"
+rfd = "0.15"
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+approx = "0.5"
