@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::core::types::{AirAssist, CutSettings, LayerMode, WorkspaceConfig};
-use crate::job::layer::{Layer, LayerList};
+use crate::job::layer::LayerList;
 
 // ---------------------------------------------------------------------------
 // Material presets

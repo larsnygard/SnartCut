@@ -1,13 +1,13 @@
 //! Device panel – connection, position readout, jog controls, job control.
 
-use iced::widget::{button, column, container, progress_bar, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, progress_bar, row, scrollable, text};
 use iced::{Alignment, Color, Element, Length};
 
 use crate::app::Message;
 use crate::core::config::Config;
 
 pub fn device_view<'a>(
-    config: &'a Config,
+    _config: &'a Config,
     connected: bool,
     position: (f64, f64),
     job_progress: Option<u8>,
@@ -23,7 +23,7 @@ pub fn device_view<'a>(
 
     let connect_label = if connected { "Disconnect" } else { "Connect" };
 
-    let label = |s: &'static str| -> iced::widget::Text<'static> {
+    let _label = |s: &'static str| -> iced::widget::Text<'static> {
         text(s)
             .size(12)
             .style(|_: &iced::Theme| text::Style {

@@ -1,10 +1,10 @@
 //! Layers panel – sidebar showing the cut-layer list.
 
-use iced::widget::{button, column, container, row, scrollable, text, text_input, Column, Row};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Column};
 use iced::{Alignment, Color, Element, Length};
 
 use crate::app::Message;
-use crate::core::types::{AirAssist, CutSettings, LayerMode};
+use crate::core::types::CutSettings;
 use crate::job::layer::LayerList;
 use crate::ui::canvas_widget::hex_to_color;
 
@@ -52,7 +52,7 @@ pub fn layers_view<'a>(
 
             let row_btn = button(label)
                 .on_press(Message::SelectLayer(i))
-                .style(move |_theme, status| button::Style {
+                .style(move |_theme, _status| button::Style {
                     background: Some(iced::Background::Color(if is_sel {
                         Color::from_rgba(0.0, 0.47, 0.83, 0.4)
                     } else {

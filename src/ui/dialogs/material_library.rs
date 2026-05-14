@@ -4,7 +4,6 @@ use iced::widget::{button, column, container, scrollable, text};
 use iced::{Color, Element, Length};
 
 use crate::app::Message;
-use crate::core::types::CutSettings;
 use crate::job::settings::material_library;
 
 pub fn material_library_view(selected: Option<&str>) -> Element<'_, Message> {

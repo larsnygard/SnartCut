@@ -4,7 +4,7 @@
 //! application via a `tokio::sync::mpsc` channel; events are sent back the
 //! same way.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{self, Receiver, Sender};

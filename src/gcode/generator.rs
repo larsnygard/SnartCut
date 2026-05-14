@@ -17,7 +17,7 @@
 //! * `PU<x>,<y>` – pen up + move
 //! * `PD<x>,<y>` – pen down + cut
 
-use crate::core::types::{AirAssist, CutSettings, DeviceType, LayerMode, PathData};
+use crate::core::types::{AirAssist, CutSettings, DeviceType, PathData};
 use crate::device::vinyl::mm_to_hpgl;
 
 /// Resolution for flattening bezier curves (mm).

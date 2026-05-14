@@ -2,9 +2,7 @@
 
 use std::path::PathBuf;
 
-use iced::widget::{
-    button, canvas, column, container, row, scrollable, text, tooltip,
-};
+use iced::widget::{button, canvas, column, container, row, text, tooltip};
 use iced::{
     Alignment, Color, Element, Length, Subscription, Task, Theme, Vector,
 };
@@ -12,20 +10,20 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
 
 use crate::canvas::scene::Scene;
-use crate::canvas::tools::ToolState;
 use crate::core::config::Config;
-use crate::core::types::{CutSettings, DeviceType, PathData, ToolType};
+use crate::core::types::{DeviceType, PathData, ToolType};
 use crate::device::base::{DeviceCommand, DeviceEvent};
 use crate::formats::{dxf, svg};
 use crate::gcode::generator::GCodeGenerator;
-use crate::job::layer::LayerList;
 use crate::job::settings::{material_library, JobSettings};
-use crate::ui::canvas_widget::{CanvasState, DesignCanvas};
+use crate::ui::canvas_widget::DesignCanvas;
 use crate::ui::device_panel;
 use crate::ui::dialogs::device_settings::{DeviceSettingsState, device_settings_view};
 use crate::ui::dialogs::material_library::material_library_view;
+use crate::ui::dialogs::preferences::preferences_view;
 use crate::ui::job_panel;
 use crate::ui::layers_panel;
+use crate::ui::ruler;
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -89,6 +87,10 @@ pub enum Message {
     JogDevice(f64, f64),
     DeviceEvent(DeviceEvent),
 
+    // ---- Menus ----
+    ToggleMenu(MenuId),
+    CloseMenu,
+
     // ---- Dialogs ----
     OpenDeviceSettings,
     DevicePortChanged(String),
@@ -99,6 +101,29 @@ pub enum Message {
     MaterialPresetSelected(String),
     MaterialPresetApply(String),
     CloseDialog,
+    CloseModal,
+
+    // ---- Preferences ----
+    OpenPreferences,
+    PrefCanvasBgChanged(String),
+    PrefWorkspaceBgChanged(String),
+    PrefGridColorChanged(String),
+    PrefGridOpacityChanged(f32),
+    PrefShapeStrokeChanged(f32),
+    PrefSelectionColorChanged(String),
+    PrefPreviewColorChanged(String),
+    PrefAntialiasingChanged(bool),
+    PrefSave,
+}
+
+// ---------------------------------------------------------------------------
+// Menu state
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuId {
+    File,
+    View,
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +134,7 @@ pub enum Message {
 pub enum Modal {
     DeviceSettings(DeviceSettingsState),
     MaterialLibrary { selected: Option<String> },
+    Preferences,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +174,7 @@ pub struct SnartLaserApp {
     pub device_log: Vec<String>,
 
     pub modal: Option<Modal>,
+    pub open_menu: Option<MenuId>,
     pub current_file: Option<PathBuf>,
     pub modified: bool,
 
@@ -182,6 +209,7 @@ impl SnartLaserApp {
                 job_progress: None,
                 device_log: Vec::new(),
                 modal: None,
+                open_menu: None,
                 current_file: None,
                 modified: false,
                 status: "Ready".to_owned(),
@@ -195,6 +223,11 @@ impl SnartLaserApp {
     // ------------------------------------------------------------------
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // Close any open dropdown on every message except ToggleMenu itself.
+        if !matches!(message, Message::ToggleMenu(_)) {
+            self.open_menu = None;
+        }
+
         match message {
             // ---- File ----
             Message::NewFile => {
@@ -623,7 +656,31 @@ impl SnartLaserApp {
                 self.modal = None;
             }
 
-            Message::CloseDialog => {
+            Message::CloseDialog | Message::CloseModal => {
+                self.modal = None;
+            }
+
+            // ---- Menus ----
+            Message::ToggleMenu(id) => {
+                self.open_menu = if self.open_menu == Some(id) { None } else { Some(id) };
+            }
+
+            Message::CloseMenu => { /* open_menu already cleared above */ }
+
+            // ---- Preferences ----
+            Message::OpenPreferences => {
+                self.modal = Some(Modal::Preferences);
+            }
+            Message::PrefCanvasBgChanged(v)       => self.config.visual.canvas_bg = v,
+            Message::PrefWorkspaceBgChanged(v)    => self.config.visual.workspace_bg = v,
+            Message::PrefGridColorChanged(v)      => self.config.visual.grid_color = v,
+            Message::PrefGridOpacityChanged(v)    => self.config.visual.grid_opacity = v,
+            Message::PrefShapeStrokeChanged(v)    => self.config.visual.shape_stroke_px = v,
+            Message::PrefSelectionColorChanged(v) => self.config.visual.selection_color = v,
+            Message::PrefPreviewColorChanged(v)   => self.config.visual.preview_color = v,
+            Message::PrefAntialiasingChanged(v)   => self.config.visual.antialiasing = v,
+            Message::PrefSave => {
+                self.config.save();
                 self.modal = None;
             }
 
@@ -645,19 +702,91 @@ impl SnartLaserApp {
     pub fn view(&self) -> Element<'_, Message> {
         let main_content = self.main_layout();
 
-        // Overlay modal if open
+        // Build a list of overlay layers to stack on top of main content.
+        let mut layers: Vec<Element<_>> = vec![main_content];
+
+        // Dropdown menu overlay
+        if let Some(menu_id) = self.open_menu {
+            // Full-screen transparent backdrop – clicking it closes the menu.
+            let backdrop = button(iced::widget::Space::new(Length::Fill, Length::Fill))
+                .on_press(Message::CloseMenu)
+                .style(|_t, _s| button::Style {
+                    background: None,
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .height(Length::Fill);
+
+            // The dropdown panel itself, positioned below the menu bar (32 px).
+            let x_offset: f32 = match menu_id {
+                MenuId::File => 8.0,
+                MenuId::View => 60.0,
+            };
+            let dropdown = container(self.build_dropdown(menu_id))
+                .style(|_| container::Style {
+                    background: Some(iced::Background::Color(Color::from_rgb(0.18, 0.18, 0.18))),
+                    text_color: None,
+                    border: iced::Border {
+                        color: Color::from_rgb(0.35, 0.35, 0.35),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    shadow: iced::Shadow {
+                        color: Color::from_rgba(0.0, 0.0, 0.0, 0.5),
+                        offset: iced::Vector::new(0.0, 4.0),
+                        blur_radius: 8.0,
+                    },
+                })
+                .width(Length::Shrink);
+
+            // Wrap dropdown in a full-size container with padding to position it.
+            let positioned = container(
+                column![
+                    iced::widget::vertical_space().height(32.0),
+                    row![
+                        iced::widget::horizontal_space().width(x_offset),
+                        dropdown,
+                    ],
+                ],
+            )
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+            layers.push(backdrop.into());
+            layers.push(positioned.into());
+        }
+
+        // Modal dialog overlay
         if let Some(modal) = &self.modal {
-            let overlay: Element<_> = match modal {
+            let dialog: Element<_> = match modal {
                 Modal::DeviceSettings(state) => device_settings_view(state),
                 Modal::MaterialLibrary { selected } => {
                     material_library_view(selected.as_deref())
                 }
+                Modal::Preferences => preferences_view(&self.config.visual),
             };
-            // Stack overlay on top
-            return iced::widget::stack![main_content, overlay].into();
+            // Dim backdrop
+            let backdrop = button(iced::widget::Space::new(Length::Fill, Length::Fill))
+                .on_press(Message::CloseModal)
+                .style(|_t, _s| button::Style {
+                    background: Some(iced::Background::Color(
+                        Color::from_rgba(0.0, 0.0, 0.0, 0.55),
+                    )),
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .height(Length::Fill);
+            // Centered container
+            let centered = container(dialog)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .width(Length::Fill)
+                .height(Length::Fill);
+            layers.push(backdrop.into());
+            layers.push(centered.into());
         }
 
-        main_content
+        iced::widget::Stack::with_children(layers).into()
     }
 
     fn main_layout(&self) -> Element<'_, Message> {
@@ -675,8 +804,29 @@ impl SnartLaserApp {
             workspace_h: self.job.workspace.height_mm,
             show_grid: self.job.workspace.show_grid,
             grid_spacing: self.job.workspace.grid_spacing_mm,
+            visual: &self.config.visual,
         })
         .width(Length::Fill)
+        .height(Length::Fill);
+
+        // ---- Rulers ----
+        let h_ruler = ruler::h_ruler(self.zoom, self.pan.x);
+        let v_ruler = ruler::v_ruler(self.zoom, self.pan.y);
+        let corner  = ruler::corner();
+
+        // Ruler row: corner square + horizontal ruler
+        let ruler_row = row![
+            corner,
+            h_ruler,
+        ]
+        .spacing(0);
+
+        // Canvas area: vertical ruler on the left, design canvas on the right
+        let canvas_area = row![
+            v_ruler,
+            canvas_widget,
+        ]
+        .spacing(0)
         .height(Length::Fill);
 
         // ---- Right panel ----
@@ -724,7 +874,9 @@ impl SnartLaserApp {
             &self.device_log,
         );
 
-        let center_col = column![canvas_widget, device_panel].spacing(0);
+        let canvas_with_rulers = column![ruler_row, canvas_area].spacing(0).height(Length::Fill);
+
+        let center_col = column![canvas_with_rulers, device_panel].spacing(0);
 
         let main_row = row![
             toolbar,
@@ -739,50 +891,78 @@ impl SnartLaserApp {
     }
 
     fn build_menu_bar(&self) -> Element<'_, Message> {
-        let btn = |label: &'static str, msg: Message| {
+        let menu_header = |label: &'static str, id: MenuId| {
+            let active = self.open_menu == Some(id);
             button(text(label).size(13))
-                .on_press(msg)
-                .style(|_t, _s| button::Style {
-                    background: None,
+                .on_press(Message::ToggleMenu(id))
+                .style(move |_t, _s| button::Style {
+                    background: Some(iced::Background::Color(if active {
+                        Color::from_rgb(0.25, 0.25, 0.25)
+                    } else {
+                        Color::TRANSPARENT
+                    })),
                     text_color: Color::WHITE,
+                    border: iced::Border { radius: 3.0.into(), ..Default::default() },
                     ..Default::default()
                 })
+                .padding(iced::Padding::from([4, 10]))
         };
 
         container(
             row![
-                btn("New", Message::NewFile),
-                btn("Open…", Message::OpenFile),
-                btn("Save", Message::SaveFile),
-                btn("Save As…", Message::SaveFileAs),
-                text("  |  ").size(13).style(|_: &iced::Theme| text::Style {
-                    color: Some(Color::from_rgb(0.4, 0.4, 0.4)),
-                }),
-                btn("Import SVG…", Message::ImportSvg),
-                btn("Import DXF…", Message::ImportDxf),
-                btn("Export G-code…", Message::ExportGcode),
-                text("  |  ").size(13).style(|_: &iced::Theme| text::Style {
-                    color: Some(Color::from_rgb(0.4, 0.4, 0.4)),
-                }),
-                btn("–", Message::ZoomOut),
-                btn("+", Message::ZoomIn),
-                btn("1:1", Message::ZoomReset),
+                menu_header("File", MenuId::File),
+                menu_header("View", MenuId::View),
             ]
-            .spacing(2)
-            .padding(iced::Padding::from([4, 8]))
+            .spacing(0)
+            .padding(iced::Padding::from([4, 4]))
             .align_y(Alignment::Center),
         )
         .style(|_| container::Style {
             background: Some(iced::Background::Color(Color::from_rgb(0.13, 0.13, 0.13))),
             border: iced::Border {
                 color: Color::from_rgb(0.25, 0.25, 0.25),
-                width: 0.0,
-                ..Default::default()
+                width: 1.0,
+                radius: 0.0.into(),
             },
             ..Default::default()
         })
         .width(Length::Fill)
         .into()
+    }
+
+    fn build_dropdown(&self, id: MenuId) -> Element<'_, Message> {
+        let items: Element<_> = match id {
+            MenuId::File => column![
+                menu_item("New",              "Ctrl+N", Some(Message::NewFile)),
+                menu_item("Open…",            "Ctrl+O", Some(Message::OpenFile)),
+                menu_separator(),
+                menu_item("Save",             "Ctrl+S", Some(Message::SaveFile)),
+                menu_item("Save As…",  "Ctrl+Shift+S", Some(Message::SaveFileAs)),
+                menu_separator(),
+                menu_item("Import SVG…",      "",       Some(Message::ImportSvg)),
+                menu_item("Import DXF…",      "",       Some(Message::ImportDxf)),
+                menu_separator(),
+                menu_item("Export G-code…",   "",       Some(Message::ExportGcode)),
+                menu_separator(),
+                menu_item("Preferences…",     "",       Some(Message::OpenPreferences)),
+            ]
+            .spacing(0)
+            .padding(4)
+            .into(),
+
+            MenuId::View => column![
+                menu_item("Zoom In",   "+", Some(Message::ZoomIn)),
+                menu_item("Zoom Out",  "–", Some(Message::ZoomOut)),
+                menu_item("Zoom 1:1",  "0", Some(Message::ZoomReset)),
+            ]
+            .spacing(0)
+            .padding(4)
+            .into(),
+        };
+
+        container(items)
+            .width(Length::Fixed(220.0))
+            .into()
     }
 
     fn build_toolbar(&self) -> Element<'_, Message> {
@@ -959,6 +1139,48 @@ impl SnartLaserApp {
 // ---------------------------------------------------------------------------
 // UI helpers
 // ---------------------------------------------------------------------------
+
+/// A single row inside a dropdown menu.
+fn menu_item<'a>(label: &'a str, shortcut: &'a str, msg: Option<Message>) -> Element<'a, Message> {
+    let content = row![
+        text(label).size(13).style(|_: &iced::Theme| text::Style {
+            color: Some(Color::WHITE),
+        }),
+        iced::widget::horizontal_space(),
+        text(shortcut).size(11).style(|_: &iced::Theme| text::Style {
+            color: Some(Color::from_rgb(0.55, 0.55, 0.55)),
+        }),
+    ]
+    .align_y(Alignment::Center)
+    .padding(iced::Padding::from([4, 8]));
+
+    let mut btn = button(content)
+        .width(Length::Fill)
+        .style(|_t, _s| button::Style {
+            background: None,
+            text_color: Color::WHITE,
+            ..Default::default()
+        });
+    if let Some(m) = msg {
+        btn = btn.on_press(m);
+    }
+    btn.into()
+}
+
+/// A thin horizontal rule used as a visual separator inside a dropdown.
+fn menu_separator<'a>() -> Element<'a, Message> {
+    container(iced::widget::horizontal_rule(1).style(|_: &iced::Theme| {
+        iced::widget::rule::Style {
+            color: Color::from_rgb(0.3, 0.3, 0.3),
+            width: 1,
+            radius: 0.0.into(),
+            fill_mode: iced::widget::rule::FillMode::Full,
+        }
+    }))
+    .padding(iced::Padding::from([2, 8]))
+    .width(Length::Fill)
+    .into()
+}
 
 fn tool_icon(tool: ToolType) -> &'static str {
     match tool {

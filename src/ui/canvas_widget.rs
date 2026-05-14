@@ -7,6 +7,7 @@ use iced::{mouse, Color, Point, Rectangle, Renderer, Size, Theme, Vector};
 use crate::app::Message;
 use crate::canvas::scene::Scene;
 use crate::canvas::tools::ToolState;
+use crate::core::config::VisualConfig;
 use crate::core::types::{PathData, PathSegment, ToolType};
 
 /// Persistent per-canvas interaction state (held by Iced's canvas machinery).
@@ -33,6 +34,7 @@ pub struct DesignCanvas<'a> {
     pub workspace_h: f64,
     pub show_grid: bool,
     pub grid_spacing: f64,
+    pub visual: &'a VisualConfig,
 }
 
 impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
@@ -42,7 +44,7 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
         &self,
         state: &Self::State,
         renderer: &Renderer,
-        theme: &Theme,
+        _theme: &Theme,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Vec<Geometry<Renderer>> {
@@ -58,7 +60,7 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
 
         // ---- Live preview (tool overlay) ----
         let mut overlay = Frame::new(renderer, bounds.size());
-        self.draw_tool_overlay(&mut overlay, cursor, bounds);
+        self.draw_tool_overlay(&mut overlay, state, cursor, bounds);
 
         vec![grid, scene_geo, overlay.into_geometry()]
     }
@@ -147,23 +149,28 @@ impl<'a> DesignCanvas<'a> {
     // ------------------------------------------------------------------
 
     fn draw_workspace_background(&self, frame: &mut Frame) {
-        // Dark background
-        frame.fill_rectangle(
-            Point::ORIGIN,
-            frame.size(),
-            Color::from_rgb(0.15, 0.15, 0.15),
-        );
+        // Dark outer background
+        let bg = hex_to_color(&self.visual.canvas_bg)
+            .unwrap_or(Color::from_rgb(0.15, 0.15, 0.15));
+        frame.fill_rectangle(Point::ORIGIN, frame.size(), bg);
 
-        // White workspace area
+        // Work area fill
+        let ws_bg = hex_to_color(&self.visual.workspace_bg)
+            .unwrap_or(Color::WHITE);
         let origin = self.scene_to_frame(0.0, 0.0);
         let ws_w = self.scene_len_to_frame(self.workspace_w);
         let ws_h = self.scene_len_to_frame(self.workspace_h);
 
-        frame.fill_rectangle(origin, Size::new(ws_w, ws_h), Color::WHITE);
+        frame.fill_rectangle(origin, Size::new(ws_w, ws_h), ws_bg);
 
         // Grid
         if self.show_grid && self.grid_spacing > 0.0 {
-            let grid_color = Color::from_rgba(0.0, 0.0, 0.0, 0.12);
+            let grid_base = hex_to_color(&self.visual.grid_color)
+                .unwrap_or(Color::BLACK);
+            let grid_color = Color {
+                a: self.visual.grid_opacity.clamp(0.0, 1.0),
+                ..grid_base
+            };
 
             let step_px = self.scene_len_to_frame(self.grid_spacing);
             if step_px >= 4.0 {
@@ -200,21 +207,23 @@ impl<'a> DesignCanvas<'a> {
     }
 
     fn draw_scene_items(&self, frame: &mut Frame) {
+        let stroke_px = self.visual.shape_stroke_px.max(0.5);
+        let sel_color = hex_to_color(&self.visual.selection_color)
+            .unwrap_or(Color::from_rgb(0.0, 0.47, 0.83));
+
         for item in self.scene.items() {
             let color = hex_to_color(&item.color).unwrap_or(Color::from_rgb(1.0, 0.0, 0.0));
             let path = self.build_iced_path(&item.path, item.translate_x, item.translate_y);
 
-            let stroke_width = self.scene_len_to_frame(0.3).max(0.5);
-
             if self.scene.is_selected(item.id) {
-                // Draw selection outline (thicker blue)
+                // Selection outline (thicker, selection colour)
                 frame.stroke(
                     &path,
                     Stroke::default()
-                        .with_color(Color::from_rgb(0.0, 0.47, 0.83))
-                        .with_width(stroke_width + 2.0),
+                        .with_color(sel_color)
+                        .with_width(stroke_px + 2.0),
                 );
-                // Draw selection handles
+                // Corner handles
                 if let Some(bb) = item.bounding_box() {
                     let hs = self.scene_len_to_frame(3.0);
                     for (hx, hy) in [
@@ -227,41 +236,65 @@ impl<'a> DesignCanvas<'a> {
                         frame.fill_rectangle(
                             Point::new(p.x - hs / 2.0, p.y - hs / 2.0),
                             Size::new(hs, hs),
-                            Color::from_rgb(0.0, 0.47, 0.83),
+                            sel_color,
                         );
                     }
                 }
             }
 
+            // Always draw the shape itself on top
             frame.stroke(
                 &path,
-                Stroke::default().with_color(color).with_width(stroke_width),
+                Stroke::default().with_color(color).with_width(stroke_px),
             );
         }
     }
 
-    fn draw_tool_overlay(&self, frame: &mut Frame, _cursor: mouse::Cursor, _bounds: Rectangle) {
-        // Preview shape while drawing
-        if let Some(preview) = self.get_preview_path_data() {
+    fn draw_tool_overlay(
+        &self,
+        frame: &mut Frame,
+        state: &CanvasState,
+        _cursor: mouse::Cursor,
+        _bounds: Rectangle,
+    ) {
+        // Live preview while drawing
+        if let Some(preview) = state.tool_state.preview_path() {
             let color = hex_to_color(self.active_color)
-                .unwrap_or(Color::from_rgb(1.0, 0.0, 0.0));
+                .unwrap_or_else(|| {
+                    hex_to_color(&self.visual.preview_color)
+                        .unwrap_or(Color::from_rgb(1.0, 0.4, 0.0))
+                });
             let path = self.build_iced_path(&preview, 0.0, 0.0);
             frame.stroke(
                 &path,
                 Stroke::default()
-                    .with_color(Color { a: 0.7, ..color })
-                    .with_width(1.0),
+                    .with_color(Color { a: 0.75, ..color })
+                    .with_width(self.visual.shape_stroke_px.max(0.5)),
             );
         }
-    }
 
-    fn get_preview_path_data(&self) -> Option<PathData> {
-        // This is called from `draw_tool_overlay` which has no mutable ToolState,
-        // so we reconstruct the preview from the state passed in draw().
-        // Instead we expose it through the outer state — the overlay frame is
-        // separate. For now, return None (overlay will come from CanvasState
-        // access in a future refactor).
-        None
+        // Rubber-band selection rectangle
+        if let ToolState::Selecting { start_x, start_y, cur_x, cur_y } = &state.tool_state {
+            let x = start_x.min(*cur_x);
+            let y = start_y.min(*cur_y);
+            let w = (cur_x - start_x).abs();
+            let h = (cur_y - start_y).abs();
+            if w > 0.5 && h > 0.5 {
+                let p0 = self.scene_to_frame(x, y);
+                let pw = self.scene_len_to_frame(w);
+                let ph = self.scene_len_to_frame(h);
+                let rect = Path::new(|b| b.rectangle(p0, Size::new(pw, ph)));
+                // Fill
+                frame.fill(&rect, Color::from_rgba(0.0, 0.47, 0.83, 0.12));
+                // Border
+                frame.stroke(
+                    &rect,
+                    Stroke::default()
+                        .with_color(Color::from_rgba(0.0, 0.47, 0.83, 0.8))
+                        .with_width(1.0),
+                );
+            }
+        }
     }
 
     fn build_iced_path(&self, pd: &PathData, tx: f64, ty: f64) -> Path {
@@ -402,7 +435,7 @@ impl<'a> DesignCanvas<'a> {
     fn handle_left_release(
         &self,
         state: &mut CanvasState,
-        (sx, sy): (f64, f64),
+        (_sx, _sy): (f64, f64),
     ) -> Option<Message> {
         let old_state = std::mem::replace(&mut state.tool_state, ToolState::Idle);
 

@@ -11,6 +11,7 @@ pub struct Config {
     pub workspace: WorkspaceConfig,
     pub app: AppConfig,
     pub device: DeviceConfig,
+    pub visual: VisualConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,42 @@ pub struct AppConfig {
     pub last_directory: String,
     pub recent_files: Vec<String>,
     pub theme: String,
+}
+
+/// Visual / display preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisualConfig {
+    /// Background colour of the area outside the work area (hex, e.g. "#222222").
+    pub canvas_bg: String,
+    /// Work area fill colour (hex, e.g. "#ffffff").
+    pub workspace_bg: String,
+    /// Grid line colour (hex).
+    pub grid_color: String,
+    /// Grid line opacity 0.0–1.0.
+    pub grid_opacity: f32,
+    /// Stroke width for vector shapes in screen pixels (independent of zoom).
+    pub shape_stroke_px: f32,
+    /// Selection highlight colour (hex).
+    pub selection_color: String,
+    /// Live tool-preview colour (hex).
+    pub preview_color: String,
+    /// Antialiasing on shapes.
+    pub antialiasing: bool,
+}
+
+impl Default for VisualConfig {
+    fn default() -> Self {
+        Self {
+            canvas_bg:        "#222222".to_owned(),
+            workspace_bg:     "#ffffff".to_owned(),
+            grid_color:       "#000000".to_owned(),
+            grid_opacity:     0.12,
+            shape_stroke_px:  1.5,
+            selection_color:  "#0078d4".to_owned(),
+            preview_color:    "#ff6600".to_owned(),
+            antialiasing:     true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +81,7 @@ impl Default for Config {
                 baud_rate: 115200,
                 device_type: DeviceType::GrblLaser,
             },
+            visual: VisualConfig::default(),
         }
     }
 }

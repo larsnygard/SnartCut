@@ -3,3 +3,4 @@ pub mod device_panel;
 pub mod dialogs;
 pub mod job_panel;
 pub mod layers_panel;
+pub mod ruler;

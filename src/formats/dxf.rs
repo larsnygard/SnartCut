@@ -13,8 +13,7 @@
 //! All coordinates are in millimetres (DXF R12+ uses drawing units; we
 //! assume the drawing unit is already mm).
 
-use std::f64::consts::PI;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::core::types::PathData;
@@ -66,6 +65,7 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<(PathData, String)>> {
     load_reader(BufReader::new(file))
 }
 
+#[allow(unused_assignments)]
 fn load_reader<R: BufRead>(reader: R) -> anyhow::Result<Vec<(PathData, String)>> {
     let mut rdr = DxfReader::new(reader);
     let mut in_entities = false;
@@ -275,8 +275,6 @@ pub fn save(
 }
 
 pub fn save_string(paths: &[(PathData, String)]) -> String {
-    use crate::core::types::PathSegment;
-
     let mut dxf = String::new();
 
     // Minimal DXF header

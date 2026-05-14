@@ -1,12 +1,10 @@
 //! Design scene – holds all [`DesignItem`]s and scene-level state.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::canvas::items::DesignItem;
-use crate::core::types::{PathData, WorkspaceConfig};
+use crate::core::types::PathData;
 
 /// The complete design scene (serialisable for save/load).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1,6 +1,6 @@
 //! Device settings dialog (modal overlay).
 
-use iced::widget::{button, column, container, pick_list, row, text, text_input};
+use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Alignment, Color, Element, Length};
 
 use crate::app::Message;
