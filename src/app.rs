@@ -152,7 +152,7 @@ pub enum RightTab {
 // Application state
 // ---------------------------------------------------------------------------
 
-pub struct SnartLaserApp {
+pub struct SnartCutApp {
     pub config: Config,
     pub scene: Scene,
     pub job: JobSettings,
@@ -181,7 +181,7 @@ pub struct SnartLaserApp {
     pub status: String,
 }
 
-impl SnartLaserApp {
+impl SnartCutApp {
     pub fn new() -> (Self, Task<Message>) {
         let config = Config::load();
         let mut job = JobSettings::new();
@@ -245,7 +245,7 @@ impl SnartLaserApp {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .add_filter("SnartLaser project", &["slp", "json"])
+                            .add_filter("SnartCut project", &["slp", "json"])
                             .pick_file()
                             .await
                             .map(|f| f.path().to_path_buf())
@@ -295,7 +295,7 @@ impl SnartLaserApp {
                 return Task::perform(
                     async {
                         rfd::AsyncFileDialog::new()
-                            .add_filter("SnartLaser project", &["slp"])
+                            .add_filter("SnartCut project", &["slp"])
                             .save_file()
                             .await
                             .map(|f| f.path().to_path_buf())

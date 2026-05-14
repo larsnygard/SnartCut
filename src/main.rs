@@ -8,13 +8,13 @@ mod gcode;
 mod job;
 mod ui;
 
-use app::SnartLaserApp;
+use app::SnartCutApp;
 
 fn main() -> iced::Result {
     env_logger::init();
 
-    iced::application("SnartLaser", SnartLaserApp::update, SnartLaserApp::view)
-        .theme(SnartLaserApp::theme)
-        .subscription(SnartLaserApp::subscription)
-        .run_with(SnartLaserApp::new)
+    iced::application("SnartCut", SnartCutApp::update, SnartCutApp::view)
+        .theme(SnartCutApp::theme)
+        .subscription(SnartCutApp::subscription)
+        .run_with(SnartCutApp::new)
 }

@@ -1,12 +1,12 @@
 [package]
-name = "snart-laser"
+name = "snart-cut"
 version = "0.1.0"
 edition = "2021"
 description = "Vinyl and laser design and cut program"
 license = "GPL-3.0-only"
 
 [[bin]]
-name = "snart-laser"
+name = "snart-cut"
 path = "src/main.rs"
 
 [dependencies]

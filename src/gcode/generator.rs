@@ -75,7 +75,7 @@ impl GCodeGenerator {
     fn generate_gcode(&self, layers: &[(&[PathData], &CutSettings)]) -> Vec<String> {
         let mut lines: Vec<String> = Vec::new();
 
-        lines.push("; SnartLaser generated G-code".to_owned());
+        lines.push("; SnartCut generated G-code".to_owned());
         lines.push("G21       ; units mm".to_owned());
         lines.push("G90       ; absolute positioning".to_owned());
         lines.push("G0 X0 Y0  ; home".to_owned());

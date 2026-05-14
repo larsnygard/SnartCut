@@ -3770,7 +3770,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "snart-laser"
+name = "snart-cut"
 version = "0.1.0"
 dependencies = [
  "anyhow",

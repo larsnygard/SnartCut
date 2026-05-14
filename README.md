@@ -1,8 +1,8 @@
-# SnartLaser
+# SnartCut
 
 **Open-source laser cutter and vinyl cutter design & control application.**
 
-SnartLaser is a cross-platform desktop application inspired by LightBurn.
+SnartCut is a cross-platform desktop application inspired by LightBurn.
 It runs **natively on Linux** (and also on Windows and macOS), is written in
 **Rust** using the [Iced](https://github.com/iced-rs/iced) GUI framework, and
 is licensed under GPLv3.
@@ -33,7 +33,7 @@ src/
 ├── app.rs                Application state, Message enum, update/view/subscription
 │
 ├── core/                 Shared infrastructure
-│   ├── config.rs         Persistent TOML config (~/.config/snart-laser/config.toml)
+│   ├── config.rs         Persistent TOML config (~/.config/snart-cut/config.toml)
 │   └── types.rs          Enumerations and data types (CutSettings, PathData, …)
 │
 ├── canvas/               2-D design canvas
@@ -75,7 +75,7 @@ The application follows the **Elm architecture** as used by Iced:
 
 ```
 ┌─────────────────────────────────────────────┐
-│              SnartLaserApp                   │
+│              SnartCutApp                   │
 │  ┌──────────────┐  ┌────────┐  ┌──────────┐ │
 │  │DesignCanvas  │  │Layers  │  │ Device   │ │
 │  │(iced canvas) │  │Panel   │  │ Panel    │ │
@@ -122,7 +122,7 @@ sudo apt install pkg-config libudev-dev
 
 ### Runtime
 
-No additional runtime dependencies — SnartLaser is a statically linked native binary.
+No additional runtime dependencies — SnartCut is a statically linked native binary.
 
 ---
 
@@ -130,15 +130,15 @@ No additional runtime dependencies — SnartLaser is a statically linked native 
 
 ```bash
 # Clone
-git clone https://github.com/larsnygard/SnartLaser.git
-cd SnartLaser
+git clone https://github.com/larsnygard/SnartCut.git
+cd SnartCut
 
 # Debug build
 cargo run
 
 # Optimised release build
 cargo build --release
-./target/release/snart-laser
+./target/release/snart-cut
 ```
 
 ---
