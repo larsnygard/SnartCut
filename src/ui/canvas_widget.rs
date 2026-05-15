@@ -22,6 +22,9 @@ pub struct CanvasState {
     pub grid_cache: Cache,
     /// Last canvas_revision seen – used to detect out-of-band changes.
     pub last_revision: Cell<u64>,
+    /// True when the current pan was started by the middle mouse button
+    /// (as opposed to left-button with the Pan tool active).
+    pub panning_by_middle: bool,
 }
 
 /// The canvas program handed to `iced::widget::Canvas`.
@@ -89,8 +92,9 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
     ) -> (canvas::event::Status, Option<Message>) {
         // Stop middle-mouse pan on button release even when cursor leaves bounds.
         if let canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Middle)) = &event {
-            if matches!(state.tool_state, ToolState::Panning { .. }) {
+            if state.panning_by_middle {
                 state.tool_state = ToolState::Idle;
+                state.panning_by_middle = false;
                 state.grid_cache.clear();
             }
             return (canvas::event::Status::Captured, None);
@@ -130,6 +134,7 @@ impl<'a> canvas::Program<Message> for DesignCanvas<'a> {
             canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle)) => {
                 // Middle-mouse drag always pans, regardless of active tool.
                 state.tool_state = ToolState::Panning { last_x: scene_pos.0, last_y: scene_pos.1 };
+                state.panning_by_middle = true;
                 (canvas::event::Status::Captured, None)
             }
             canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
@@ -460,6 +465,12 @@ impl<'a> DesignCanvas<'a> {
                 Some(Message::TranslateSelected(dx, dy))
             }
             ToolState::Panning { last_x, last_y } => {
+                // Stop left-button panning if the tool switched away (space released
+                // while LMB still held). Middle-button panning is unaffected.
+                if !state.panning_by_middle && self.active_tool != ToolType::Pan {
+                    state.tool_state = ToolState::Idle;
+                    return Some(Message::CursorMoved(sx, sy));
+                }
                 let dpx = (sx - *last_x) as f32 * self.zoom;
                 let dpy = (sy - *last_y) as f32 * self.zoom;
                 *last_x = sx;
@@ -476,6 +487,7 @@ impl<'a> DesignCanvas<'a> {
         (_sx, _sy): (f64, f64),
     ) -> Option<Message> {
         let old_state = std::mem::replace(&mut state.tool_state, ToolState::Idle);
+        state.panning_by_middle = false;
 
         match (&self.active_tool, &old_state) {
             (ToolType::Select, ToolState::Selecting { start_x, start_y, cur_x, cur_y }) => {

@@ -1,4 +1,4 @@
-//! G-code and HPGL generator.
+//! G-code, HPGL and Ruida `.rd` generator.
 //!
 //! Converts a list of `(paths, CutSettings)` layer pairs into machine-code
 //! command strings.
@@ -16,6 +16,10 @@
 //! * `FS<n>` – blade force (g)
 //! * `PU<x>,<y>` – pen up + move
 //! * `PD<x>,<y>` – pen down + cut
+//!
+//! # Ruida `.rd`
+//! Binary format; output lines are hex-encoded bytes (one per line).
+//! The device driver decodes them before transfer.
 
 use crate::core::types::{AirAssist, CutSettings, DeviceType, PathData};
 use crate::device::vinyl::mm_to_hpgl;
@@ -58,7 +62,8 @@ impl GCodeGenerator {
     /// Generate machine-code lines for the given layers.
     pub fn generate(&self, layers: &[(&[PathData], &CutSettings)]) -> Vec<String> {
         match self.device_type {
-            DeviceType::VinylCutter => self.generate_hpgl(layers),
+            DeviceType::VinylCutter | DeviceType::VevorSmart1 => self.generate_hpgl(layers),
+            DeviceType::RuidaLaser  => self.generate_rd(layers),
             _ => self.generate_gcode(layers),
         }
     }
@@ -230,4 +235,121 @@ impl GCodeGenerator {
 
         lines
     }
+
+    // ------------------------------------------------------------------
+    // Ruida `.rd` binary format
+    // ------------------------------------------------------------------
+    //
+    // Coordinates are encoded in µm (1 unit = 1 µm = 0.001 mm) as 5-byte
+    // little-endian values split across 5 bytes (the top nibble of each
+    // byte encodes which axis and whether sign is negative).
+    //
+    // For simplicity we use the "absolute coordinate" encoding below which
+    // is compatible with all Ruida controllers.  Each byte is XOR-scrambled
+    // with 0x88 before transmission; the device driver performs this step.
+    //
+    // Key command bytes (unscrambled):
+    //   0xA8 <x5> <y5>  – rapid move (laser off)
+    //   0xA9 <x5> <y5>  – cut move   (laser on)
+    //   0xC6 0x01 <byte>               – set min power layer 0  (0–255)
+    //   0xC6 0x02 <byte>               – set max power layer 0
+    //   0xC6 0x05 <speed3>             – set cut speed (µm/s, 3 bytes big-endian)
+    //   0xE7 0x00                      – file header
+    //   0xDA 0x01                      – end of file
+
+    fn generate_rd(&self, layers: &[(&[PathData], &CutSettings)]) -> Vec<String> {
+        let mut bytes: Vec<u8> = Vec::new();
+
+        // File header
+        bytes.extend_from_slice(&[0xD4, 0x00]); // begin job
+
+        for (paths, settings) in layers {
+            if !settings.enabled {
+                continue;
+            }
+
+            let speed_um_s = (settings.speed_mm_s * 1000.0) as u32;
+            let power_byte = (settings.power_pct / 100.0 * 255.0).clamp(0.0, 255.0) as u8;
+
+            // Set speed (3 bytes, big-endian, µm/s)
+            bytes.push(0xC6);
+            bytes.push(0x05);
+            bytes.push(((speed_um_s >> 16) & 0xFF) as u8);
+            bytes.push(((speed_um_s >> 8)  & 0xFF) as u8);
+            bytes.push( (speed_um_s        & 0xFF) as u8);
+
+            // Set min/max power (layer 0)
+            bytes.extend_from_slice(&[0xC6, 0x01, power_byte]);
+            bytes.extend_from_slice(&[0xC6, 0x02, power_byte]);
+
+            for pass in 0..settings.passes {
+                let _ = pass; // passes handled by repeating paths
+                for path in *paths {
+                    let flat = path.flatten(FLATTEN_TOL);
+                    if flat.is_empty() {
+                        continue;
+                    }
+
+                    // Group into sub-paths
+                    let mut subs: Vec<Vec<[crate::core::types::Point; 2]>> = Vec::new();
+                    let mut cur: Vec<[crate::core::types::Point; 2]> = Vec::new();
+                    for seg in &flat {
+                        if cur.is_empty() {
+                            cur.push(*seg);
+                        } else {
+                            let last = cur.last().unwrap()[1];
+                            if (seg[0].x - last.x).abs() < 1e-6
+                                && (seg[0].y - last.y).abs() < 1e-6
+                            {
+                                cur.push(*seg);
+                            } else {
+                                subs.push(std::mem::take(&mut cur));
+                                cur.push(*seg);
+                            }
+                        }
+                    }
+                    if !cur.is_empty() {
+                        subs.push(cur);
+                    }
+
+                    for sub in subs {
+                        let start = sub[0][0];
+                        // Rapid to start (laser off)
+                        bytes.push(0xA8);
+                        bytes.extend_from_slice(&rd_coord(start.x));
+                        bytes.extend_from_slice(&rd_coord(self.flip_y(start.y)));
+
+                        for seg in &sub {
+                            let end = seg[1];
+                            // Cut move (laser on)
+                            bytes.push(0xA9);
+                            bytes.extend_from_slice(&rd_coord(end.x));
+                            bytes.extend_from_slice(&rd_coord(self.flip_y(end.y)));
+                        }
+                    }
+                }
+            }
+        }
+
+        // End of file
+        bytes.extend_from_slice(&[0xDA, 0x01]);
+
+        // Encode as hex lines so the driver can decode them
+        bytes.iter().map(|b| format!("{b:02X}")).collect()
+    }
+}
+
+/// Encode a coordinate (mm) as Ruida's 5-byte absolute format.
+/// Unit: 1 µm = 0.001 mm.  Range: 0 – 1677 mm (20-bit µm value).
+fn rd_coord(mm: f64) -> [u8; 5] {
+    let um = (mm.max(0.0) * 1000.0).round() as u32;
+    // Ruida 5-byte encoding: each byte holds 7 bits of the value in bits 6..0,
+    // with bit 7 always 0.  Byte 0 is the most-significant 7 bits.
+    [
+        ((um >> 28) & 0x7F) as u8,
+        ((um >> 21) & 0x7F) as u8,
+        ((um >> 14) & 0x7F) as u8,
+        ((um >>  7) & 0x7F) as u8,
+        ( um        & 0x7F) as u8,
+    ]
 }

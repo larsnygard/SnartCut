@@ -1,16 +1,16 @@
 [package]
 name = "snart-cut"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "Vinyl and laser design and cut program"
 license = "GPL-3.0-only"
 
 [[bin]]
-name = "snart-cut"
+name = "snartcut"
 path = "src/main.rs"
 
 [dependencies]
-iced = { version = "0.13", features = ["canvas", "tokio", "advanced"] }
+iced = { version = "0.13", features = ["canvas", "tokio", "advanced", "svg"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

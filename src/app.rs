@@ -93,6 +93,7 @@ pub enum Message {
     // ---- Menus ----
     ToggleMenu(MenuId),
     CloseMenu,
+    OpenAbout,
 
     // ---- Dialogs ----
     OpenDeviceSettings,
@@ -137,6 +138,7 @@ pub enum Message {
 pub enum MenuId {
     File,
     View,
+    Help,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +150,7 @@ pub enum Modal {
     DeviceSettings(DeviceSettingsState),
     MaterialLibrary { selected: Option<String> },
     Preferences(PreferencesState),
+    About,
 }
 
 // ---------------------------------------------------------------------------
@@ -620,6 +623,8 @@ impl SnartCutApp {
                 let profile = self.config.device.active().clone();
                 let (cmd_tx, event_rx) = match profile.device_type {
                     DeviceType::VinylCutter => crate::device::vinyl::spawn(),
+                    DeviceType::RuidaLaser  => crate::device::ruida::spawn(),
+                    DeviceType::VevorSmart1 => crate::device::vevor::spawn(),
                     _ => crate::device::grbl::spawn(),
                 };
                 let _ = cmd_tx.try_send(DeviceCommand::Connect { port: profile.port, baud_rate: profile.baud_rate });
@@ -757,13 +762,31 @@ impl SnartCutApp {
 
             Message::DeviceProfileNew => {
                 let n = self.config.device.profiles.len() + 1;
+                // Pre-fill sensible defaults based on the currently selected type
+                // in the settings dialog (if open), otherwise use a generic preset.
+                let (device_type, work_area_w, work_area_h, baud_rate) =
+                    if let Some(Modal::DeviceSettings(ref s)) = self.modal {
+                        match s.device_type {
+                            DeviceType::VevorSmart1 => (
+                                DeviceType::VevorSmart1,
+                                crate::device::vevor::WORK_AREA_W_MM,
+                                crate::device::vevor::WORK_AREA_H_MM,
+                                9600u32,
+                            ),
+                            DeviceType::VinylCutter => (DeviceType::VinylCutter, 300.0, 500.0, 9600),
+                            DeviceType::RuidaLaser  => (DeviceType::RuidaLaser, 900.0, 600.0, 115200),
+                            dt => (dt, 400.0, 400.0, 115200),
+                        }
+                    } else {
+                        (DeviceType::GrblLaser, 400.0, 400.0, 115200)
+                    };
                 self.config.device.profiles.push(DeviceProfile {
-                    name: format!("Profile {n}"),
+                    name: format!("{} {n}", device_type.label()),
                     port: String::new(),
-                    baud_rate: 115200,
-                    device_type: DeviceType::GrblLaser,
-                    work_area_w: 400.0,
-                    work_area_h: 400.0,
+                    baud_rate,
+                    device_type,
+                    work_area_w,
+                    work_area_h,
                 });
                 self.config.device.active_profile = self.config.device.profiles.len() - 1;
                 if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
@@ -852,6 +875,10 @@ impl SnartCutApp {
 
             Message::CloseMenu => { /* open_menu already cleared above */ }
 
+            Message::OpenAbout => {
+                self.modal = Some(Modal::About);
+            }
+
             // ---- Preferences ----
             Message::OpenPreferences => {
                 self.modal = Some(Modal::Preferences(PreferencesState::default()));
@@ -923,6 +950,7 @@ impl SnartCutApp {
             let x_offset: f32 = match menu_id {
                 MenuId::File => 8.0,
                 MenuId::View => 60.0,
+                MenuId::Help => 112.0,
             };
             let dropdown = container(self.build_dropdown(menu_id))
                 .style(|_| container::Style {
@@ -972,6 +1000,7 @@ impl SnartCutApp {
                     &self.config.bindings,
                     &self.config.mouse_bindings,
                 ),
+                Modal::About => about_view(),
             };
             // Dim backdrop
             let backdrop = button(iced::widget::Space::new(Length::Fill, Length::Fill))
@@ -1121,6 +1150,7 @@ impl SnartCutApp {
             row![
                 menu_header("File", MenuId::File),
                 menu_header("View", MenuId::View),
+                menu_header("Help", MenuId::Help),
             ]
             .spacing(0)
             .padding(iced::Padding::from([4, 4]))
@@ -1167,6 +1197,13 @@ impl SnartCutApp {
             .spacing(0)
             .padding(4)
             .into(),
+
+            MenuId::Help => column![
+                menu_item("About SnartCut…", "", Some(Message::OpenAbout)),
+            ]
+            .spacing(0)
+            .padding(4)
+            .into(),
         };
 
         container(items)
@@ -1181,7 +1218,7 @@ impl SnartCutApp {
                 let is_active = self.active_tool == tool;
                 col.push(
                     tooltip(
-                        button(text(tool_icon(tool)).size(18))
+                        button(svg_icon(tool))
                             .on_press(Message::ToolSelected(tool))
                             .style(move |_t, _s| button::Style {
                                 background: Some(iced::Background::Color(if is_active {
@@ -1443,17 +1480,81 @@ fn menu_separator<'a>() -> Element<'a, Message> {
     .into()
 }
 
-fn tool_icon(tool: ToolType) -> &'static str {
-    match tool {
-        ToolType::Select => "↖",
-        ToolType::Pan => "✋",
-        ToolType::Rectangle => "▭",
-        ToolType::Ellipse => "⬭",
-        ToolType::Line => "╱",
-        ToolType::Polyline => "⌇",
-        ToolType::Bezier => "⌢",
-        _ => "?",
-    }
+fn about_view() -> Element<'static, Message> {
+    use iced::widget::{button, column, container, horizontal_rule, row, text};
+
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    const LICENSE: &str = env!("CARGO_PKG_LICENSE");
+    const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
+
+    let title = text("SnartCut")
+        .size(22)
+        .style(|_: &_| iced::widget::text::Style { color: Some(Color::WHITE) });
+
+    let body = column![
+        title,
+        text(DESCRIPTION).size(13).style(|_: &_| iced::widget::text::Style {
+            color: Some(Color::from_rgb(0.75, 0.75, 0.75)),
+        }),
+        horizontal_rule(1),
+        row![
+            text("Version").size(13).width(Length::Fixed(100.0)),
+            text(VERSION).size(13).style(|_: &_| iced::widget::text::Style { color: Some(Color::WHITE) }),
+        ].spacing(8),
+        row![
+            text("License").size(13).width(Length::Fixed(100.0)),
+            text(LICENSE).size(13).style(|_: &_| iced::widget::text::Style { color: Some(Color::WHITE) }),
+        ].spacing(8),
+        row![
+            text("Built with").size(13).width(Length::Fixed(100.0)),
+            text("Rust + Iced 0.13").size(13).style(|_: &_| iced::widget::text::Style { color: Some(Color::WHITE) }),
+        ].spacing(8),
+        horizontal_rule(1),
+        row![
+            iced::widget::Space::with_width(Length::Fill),
+            button(text("Close").size(14))
+                .on_press(Message::CloseModal)
+                .style(iced::widget::button::primary),
+        ].spacing(8),
+    ]
+    .spacing(10)
+    .padding(24)
+    .width(Length::Fixed(360.0));
+
+    container(body)
+        .style(|_: &_| container::Style {
+            background: Some(iced::Background::Color(Color::from_rgb(0.13, 0.13, 0.15))),
+            border: iced::Border {
+                color: Color::from_rgb(0.35, 0.35, 0.4),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            text_color: Some(Color::WHITE),
+            shadow: iced::Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.6),
+                offset: iced::Vector::new(0.0, 4.0),
+                blur_radius: 16.0,
+            },
+        })
+        .into()
+}
+
+fn svg_icon(tool: ToolType) -> Element<'static, Message> {
+    use iced::widget::svg::{self, Svg};
+    let bytes: &'static [u8] = match tool {
+        ToolType::Select    => include_bytes!("../assets/icons/select.svg"),
+        ToolType::Pan       => include_bytes!("../assets/icons/pan.svg"),
+        ToolType::Rectangle => include_bytes!("../assets/icons/rectangle.svg"),
+        ToolType::Ellipse   => include_bytes!("../assets/icons/ellipse.svg"),
+        ToolType::Line      => include_bytes!("../assets/icons/line.svg"),
+        ToolType::Polyline  => include_bytes!("../assets/icons/polyline.svg"),
+        ToolType::Bezier    => include_bytes!("../assets/icons/bezier.svg"),
+        _                   => include_bytes!("../assets/icons/select.svg"),
+    };
+    Svg::new(svg::Handle::from_memory(bytes))
+        .width(Length::Fixed(22.0))
+        .height(Length::Fixed(22.0))
+        .into()
 }
 
 fn tab_button(label: &str, active: bool, msg: Message) -> Element<'_, Message> {

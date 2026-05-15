@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Cursor arrow: tip at top-left, shaft down, horizontal spur right, tail bottom-right -->
+  <path d="M 4 2 L 4 16 L 7 12.5 L 10 19.5 L 12 18.5 L 9 11.5 L 15.5 11.5 Z"
+        fill="white"/>
+</svg>

@@ -6,6 +6,9 @@ on:
       - 'v[0-9]+.*'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -16,23 +19,23 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
-            artifact: snart-cut
-            archive: snart-cut-linux-x86_64.tar.gz
+            artifact: snartcut
+            archive: snartcut-linux-x86_64.tar.gz
 
           - target: aarch64-apple-darwin
             os: macos-14
-            artifact: snart-cut
-            archive: snart-cut-macos-aarch64.tar.gz
+            artifact: snartcut
+            archive: snartcut-macos-aarch64.tar.gz
 
           - target: x86_64-apple-darwin
             os: macos-13
-            artifact: snart-cut
-            archive: snart-cut-macos-x86_64.tar.gz
+            artifact: snartcut
+            archive: snartcut-macos-x86_64.tar.gz
 
           - target: x86_64-pc-windows-msvc
             os: windows-2022
-            artifact: snart-cut.exe
-            archive: snart-cut-windows-x86_64.zip
+            artifact: snartcut.exe
+            archive: snartcut-windows-x86_64.zip
 
     steps:
       - uses: actions/checkout@v4

@@ -14,6 +14,8 @@ pub enum DeviceType {
     GrblSpindle,
     VinylCutter,
     Marlin,
+    RuidaLaser,
+    VevorSmart1,
 }
 
 impl std::fmt::Display for DeviceType {
@@ -29,6 +31,8 @@ impl DeviceType {
             DeviceType::GrblSpindle => "GRBL Spindle",
             DeviceType::VinylCutter => "Vinyl Cutter",
             DeviceType::Marlin => "Marlin",
+            DeviceType::RuidaLaser  => "Ruida Laser",
+            DeviceType::VevorSmart1 => "Vevor Smart 1",
         }
     }
 
@@ -38,6 +42,8 @@ impl DeviceType {
             DeviceType::GrblSpindle,
             DeviceType::VinylCutter,
             DeviceType::Marlin,
+            DeviceType::RuidaLaser,
+            DeviceType::VevorSmart1,
         ]
     }
 }
