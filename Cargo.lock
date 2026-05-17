@@ -3840,10 +3840,11 @@ dependencies = [
 
 [[package]]
 name = "snart-cut"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "approx",
+ "crc32fast",
  "dirs 5.0.1",
  "env_logger",
  "iced",
@@ -3857,6 +3858,7 @@ dependencies = [
  "toml",
  "usvg 0.44.0",
  "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

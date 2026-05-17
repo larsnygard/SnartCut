@@ -278,6 +278,8 @@ pub fn spawn() -> (Sender<DeviceCommand>, Receiver<DeviceEvent>) {
                             let _ = t.send(&pkt);
                         }
                     }
+
+                    DeviceCommand::SendRaw(_) => {}
                 }
 
                 // Periodic heartbeat & response processing

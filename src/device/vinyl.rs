@@ -103,6 +103,7 @@ pub fn spawn() -> (Sender<DeviceCommand>, Receiver<DeviceEvent>) {
                     | DeviceCommand::SoftReset
                     | DeviceCommand::Home
                     | DeviceCommand::Jog { .. }
+                    | DeviceCommand::SendRaw(_)
                     | DeviceCommand::PollStatus => {}
                 }
             }

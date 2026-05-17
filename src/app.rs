@@ -1,6 +1,7 @@
 //! Top-level Iced application state and message handler.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use iced::widget::{button, canvas, column, container, row, text, tooltip};
 use iced::{
@@ -10,7 +11,10 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
 
 use crate::canvas::scene::Scene;
-use crate::core::config::{BindingId, Config, DeviceProfile, ScrollAction};
+use crate::core::config::{
+    BindingId, Config, DeviceConnection, DeviceProfile, ScrollAction,
+    SerialFlowControl, SerialParity, WifiTargetType,
+};
 use crate::core::types::{DeviceType, PathData, ToolType};
 use crate::device::base::{DeviceCommand, DeviceEvent};
 use crate::formats::{dxf, svg};
@@ -89,6 +93,12 @@ pub enum Message {
     HomeDevice,
     JogDevice(f64, f64),
     DeviceEvent(DeviceEvent),
+    PollVevorPresence,
+    VevorPresenceDetected(Option<String>),
+    // ---- Vevor device controls ----
+    VevorSendSetmat,
+    VevorPollStatus,
+    VevorSyncReset,
 
     // ---- Menus ----
     ToggleMenu(MenuId),
@@ -97,8 +107,18 @@ pub enum Message {
 
     // ---- Dialogs ----
     OpenDeviceSettings,
+    DeviceConnectionRescan,
+    DeviceConnectionChanged(DeviceConnection),
     DevicePortChanged(String),
     DeviceBaudChanged(u32),
+    DeviceSerialDataBitsChanged(u8),
+    DeviceSerialParityChanged(SerialParity),
+    DeviceSerialStopBitsChanged(u8),
+    DeviceSerialFlowControlChanged(SerialFlowControl),
+    DeviceUsbDeviceChanged(String),
+    DeviceWifiTargetChanged(String),
+    DeviceWifiTargetTypeChanged(WifiTargetType),
+    DeviceBluetoothDeviceChanged(String),
     DeviceTypeChanged(DeviceType),
     DeviceProfileSelected(usize),
     DeviceProfileNew,
@@ -188,6 +208,8 @@ pub struct SnartCutApp {
     pub device_position: (f64, f64),
     pub job_progress: Option<u8>,
     pub device_log: Vec<String>,
+    pub vevor_presence_target: Option<String>,
+    pub vevor_last_status: String,
 
     pub pre_space_tool: Option<ToolType>,
     pub canvas_revision: u64,
@@ -226,6 +248,8 @@ impl SnartCutApp {
                 device_position: (0.0, 0.0),
                 job_progress: None,
                 device_log: Vec::new(),
+                vevor_presence_target: None,
+                vevor_last_status: String::new(),
                 pre_space_tool: None,
                 canvas_revision: 0,
                 modal: None,
@@ -621,13 +645,68 @@ impl SnartCutApp {
             // ---- Device ----
             Message::ConnectDevice => {
                 let profile = self.config.device.active().clone();
+                let (mut target, baud_rate) = match profile.connection {
+                    DeviceConnection::Serial => (profile.port.clone(), profile.baud_rate),
+                    DeviceConnection::Usb => {
+                        let raw = profile.usb_device.trim();
+                        let cleaned = if raw.starts_with("Printer Queue: ") {
+                            raw.to_owned()
+                        } else if let Some(stripped) = raw.strip_prefix("USB Path: ") {
+                            stripped
+                                .split(" | ")
+                                .next()
+                                .unwrap_or(stripped)
+                                .trim()
+                                .to_owned()
+                        } else {
+                            raw.split(" | ")
+                                .next()
+                                .unwrap_or(raw)
+                                .trim()
+                                .to_owned()
+                        };
+                        (cleaned, profile.baud_rate)
+                    }
+                    DeviceConnection::Wifi => (profile.wifi_target.clone(), profile.baud_rate),
+                    DeviceConnection::Bluetooth => {
+                        (profile.bluetooth_device.clone(), profile.baud_rate)
+                    }
+                };
+
+                if target.trim().is_empty()
+                    && profile.device_type == DeviceType::VevorSmart1
+                    && profile.connection == DeviceConnection::Usb
+                {
+                    if let Some(found) = crate::device::vevor::auto_detect_windows_target() {
+                        target = found.clone();
+                        self.config.device.active_mut().usb_device = found.clone();
+                        if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                            s.usb_device = found.clone();
+                        }
+                        self.status = format!("Vevor detected: {found}");
+                    }
+                }
+
+                if target.trim().is_empty() {
+                    self.status = if profile.device_type == DeviceType::VevorSmart1
+                        && profile.connection == DeviceConnection::Usb
+                    {
+                        "Vevor not detected. Open Device Settings -> USB, press Rescan, or enter USB Target manually.".to_owned()
+                    } else {
+                        "Connection target is empty. Configure Device Settings first.".to_owned()
+                    };
+                    return Task::none();
+                }
                 let (cmd_tx, event_rx) = match profile.device_type {
                     DeviceType::VinylCutter => crate::device::vinyl::spawn(),
                     DeviceType::RuidaLaser  => crate::device::ruida::spawn(),
                     DeviceType::VevorSmart1 => crate::device::vevor::spawn(),
                     _ => crate::device::grbl::spawn(),
                 };
-                let _ = cmd_tx.try_send(DeviceCommand::Connect { port: profile.port, baud_rate: profile.baud_rate });
+                let _ = cmd_tx.try_send(DeviceCommand::Connect {
+                    port: target,
+                    baud_rate,
+                });
                 self.device_cmd_tx = Some(cmd_tx);
                 self.device_event_rx = Some(event_rx);
             }
@@ -638,6 +717,58 @@ impl SnartCutApp {
                 }
                 self.device_cmd_tx = None;
                 self.device_connected = false;
+            }
+
+            Message::PollVevorPresence => {
+                let profile = self.config.device.active().clone();
+                if profile.device_type == DeviceType::VevorSmart1
+                    && profile.connection == DeviceConnection::Usb
+                    && !self.device_connected
+                {
+                    return Task::perform(
+                        async { crate::device::vevor::auto_detect_windows_target() },
+                        Message::VevorPresenceDetected,
+                    );
+                }
+            }
+
+            Message::VevorPresenceDetected(found) => {
+                if self.vevor_presence_target != found {
+                    self.vevor_presence_target = found.clone();
+                    match found {
+                        Some(target) => {
+                            self.status = format!("Vevor detected: {target}");
+                            self.device_log.push(format!("Vevor detected: {target}"));
+                        }
+                        None => {
+                            self.status = "Vevor not detected".to_owned();
+                        }
+                    }
+                }
+            }
+
+            Message::VevorSendSetmat => {
+                if let Some(tx) = &self.device_cmd_tx {
+                    let w = (crate::device::vevor::WORK_AREA_W_MM * 40.0).round().max(1.0) as u32;
+                    let h = (crate::device::vevor::WORK_AREA_H_MM * 40.0).round().max(1.0) as u32;
+                    let cmd = format!("setmat:1;JS{w},{h};");
+                    let _ = tx.try_send(DeviceCommand::SendRaw(cmd.clone()));
+                    self.device_log.push(format!("→ {cmd}"));
+                }
+            }
+
+            Message::VevorPollStatus => {
+                if let Some(tx) = &self.device_cmd_tx {
+                    let _ = tx.try_send(DeviceCommand::SendRaw("TB42;".to_owned()));
+                    self.device_log.push("→ TB42;".to_owned());
+                }
+            }
+
+            Message::VevorSyncReset => {
+                if let Some(tx) = &self.device_cmd_tx {
+                    let _ = tx.try_send(DeviceCommand::SendRaw("JS;".to_owned()));
+                    self.device_log.push("→ JS; (sync reset)".to_owned());
+                }
             }
 
             Message::SendJob => {
@@ -686,6 +817,10 @@ impl SnartCutApp {
                     self.device_log.push("Disconnected".to_owned());
                 }
                 DeviceEvent::LineReceived(line) => {
+                    // Capture TB42 status response for Vevor panel display
+                    if line.contains("TB42") || line.contains("LOAD") || line.contains("CUT") || line.contains("START") || line.contains("BUSY") || line.contains("IDLE") {
+                        self.vevor_last_status = line.clone();
+                    }
                     self.device_log.push(line);
                     if self.device_log.len() > 500 {
                         self.device_log.drain(..100);
@@ -718,6 +853,19 @@ impl SnartCutApp {
                 ));
             }
 
+            Message::DeviceConnectionRescan => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.rescan_connection_devices();
+                }
+            }
+
+            Message::DeviceConnectionChanged(connection) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.connection = connection;
+                }
+                self.config.device.active_mut().connection = connection;
+            }
+
             Message::DevicePortChanged(port) => {
                 if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
                     s.port = port.clone();
@@ -730,6 +878,62 @@ impl SnartCutApp {
                     s.baud_rate = baud.to_string();
                 }
                 self.config.device.active_mut().baud_rate = baud;
+            }
+
+            Message::DeviceSerialDataBitsChanged(bits) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.serial_data_bits = bits;
+                }
+                self.config.device.active_mut().serial_data_bits = bits;
+            }
+
+            Message::DeviceSerialParityChanged(parity) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.serial_parity = parity;
+                }
+                self.config.device.active_mut().serial_parity = parity;
+            }
+
+            Message::DeviceSerialStopBitsChanged(bits) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.serial_stop_bits = bits;
+                }
+                self.config.device.active_mut().serial_stop_bits = bits;
+            }
+
+            Message::DeviceSerialFlowControlChanged(flow) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.serial_flow_control = flow;
+                }
+                self.config.device.active_mut().serial_flow_control = flow;
+            }
+
+            Message::DeviceUsbDeviceChanged(device) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.usb_device = device.clone();
+                }
+                self.config.device.active_mut().usb_device = device;
+            }
+
+            Message::DeviceWifiTargetChanged(target) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.wifi_target = target.clone();
+                }
+                self.config.device.active_mut().wifi_target = target;
+            }
+
+            Message::DeviceWifiTargetTypeChanged(target_type) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.wifi_target_type = target_type;
+                }
+                self.config.device.active_mut().wifi_target_type = target_type;
+            }
+
+            Message::DeviceBluetoothDeviceChanged(device) => {
+                if let Some(Modal::DeviceSettings(ref mut s)) = self.modal {
+                    s.bluetooth_device = device.clone();
+                }
+                self.config.device.active_mut().bluetooth_device = device;
             }
 
             Message::DeviceTypeChanged(dt) => {
@@ -782,8 +986,17 @@ impl SnartCutApp {
                     };
                 self.config.device.profiles.push(DeviceProfile {
                     name: format!("{} {n}", device_type.label()),
+                    connection: DeviceConnection::Serial,
                     port: String::new(),
                     baud_rate,
+                    serial_data_bits: 8,
+                    serial_parity: SerialParity::None,
+                    serial_stop_bits: 1,
+                    serial_flow_control: SerialFlowControl::None,
+                    usb_device: String::new(),
+                    wifi_target: String::new(),
+                    wifi_target_type: WifiTargetType::IpAddress,
+                    bluetooth_device: String::new(),
                     device_type,
                     work_area_w,
                     work_area_h,
@@ -1107,6 +1320,8 @@ impl SnartCutApp {
         let device_panel = device_panel::device_view(
             &self.config,
             self.device_connected,
+            self.vevor_presence_target.as_deref(),
+            &self.vevor_last_status,
             self.device_position,
             self.job_progress,
             &self.device_log,
@@ -1301,10 +1516,11 @@ impl SnartCutApp {
     // ------------------------------------------------------------------
 
     pub fn subscription(&self) -> Subscription<Message> {
-        use iced::keyboard;
+        use iced::{keyboard, time};
         Subscription::batch([
             keyboard::on_key_press(|key, _mods| Some(Message::KeyPressed(key))),
             keyboard::on_key_release(|key, _mods| Some(Message::KeyReleased(key))),
+            time::every(Duration::from_secs(2)).map(|_| Message::PollVevorPresence),
         ])
     }
 

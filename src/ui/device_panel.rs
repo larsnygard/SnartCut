@@ -4,11 +4,14 @@ use iced::widget::{button, column, container, pick_list, progress_bar, row, scro
 use iced::{Alignment, Color, Element, Length};
 
 use crate::app::Message;
-use crate::core::config::Config;
+use crate::core::config::{Config, DeviceConnection, WifiTargetType};
+use crate::core::types::DeviceType;
 
 pub fn device_view<'a>(
     config: &'a Config,
     connected: bool,
+    vevor_presence_target: Option<&'a str>,
+    vevor_last_status: &'a str,
     position: (f64, f64),
     job_progress: Option<u8>,
     log_messages: &'a [String],
@@ -22,6 +25,85 @@ pub fn device_view<'a>(
     let status_text = if connected { "Connected" } else { "Disconnected" };
 
     let connect_label = if connected { "Disconnect" } else { "Connect" };
+
+    let profile = config.device.active();
+    let conn_summary = match profile.connection {
+        DeviceConnection::Serial => {
+            let port = if profile.port.trim().is_empty() { "(not set)" } else { profile.port.as_str() };
+            format!(
+                "Connection: Serial | {} @ {} bps, {}{}{}",
+                port,
+                profile.baud_rate,
+                profile.serial_data_bits,
+                match profile.serial_parity {
+                    crate::core::config::SerialParity::None => "N",
+                    crate::core::config::SerialParity::Even => "E",
+                    crate::core::config::SerialParity::Odd => "O",
+                },
+                profile.serial_stop_bits,
+            )
+        }
+        DeviceConnection::Usb => {
+            let dev = if profile.usb_device.trim().is_empty() {
+                "(not set)"
+            } else {
+                profile.usb_device.as_str()
+            };
+            if profile.device_type == crate::core::types::DeviceType::VevorSmart1 {
+                format!("Connection: USB | {dev} | Vevor auto-detect on Connect")
+            } else {
+                format!("Connection: USB | {dev}")
+            }
+        }
+        DeviceConnection::Wifi => {
+            let ty = match profile.wifi_target_type {
+                WifiTargetType::IpAddress => "IP",
+                WifiTargetType::Hostname => "Hostname",
+                WifiTargetType::Url => "URL",
+            };
+            let target = if profile.wifi_target.trim().is_empty() {
+                "(not set)"
+            } else {
+                profile.wifi_target.as_str()
+            };
+            format!("Connection: Wi-Fi | {ty}: {target}")
+        }
+        DeviceConnection::Bluetooth => {
+            let dev = if profile.bluetooth_device.trim().is_empty() {
+                "(not set)"
+            } else {
+                profile.bluetooth_device.as_str()
+            };
+            format!("Connection: Bluetooth | {dev}")
+        }
+    };
+
+    let vevor_status_row = if profile.device_type == crate::core::types::DeviceType::VevorSmart1
+        && profile.connection == DeviceConnection::Usb
+    {
+        let (txt, color) = if connected {
+            ("Vevor Status: Connected".to_owned(), Color::from_rgb(0.2, 0.8, 0.2))
+        } else if let Some(target) = vevor_presence_target {
+            (
+                format!("Vevor Status: Detected ({target})"),
+                Color::from_rgb(0.85, 0.75, 0.25),
+            )
+        } else {
+            (
+                "Vevor Status: Not detected".to_owned(),
+                Color::from_rgb(0.8, 0.3, 0.3),
+            )
+        };
+        Some(row![
+            text(txt)
+                .size(11)
+                .style(move |_: &iced::Theme| text::Style {
+                    color: Some(color),
+                }),
+        ])
+    } else {
+        None
+    };
 
     let _label = |s: &'static str| -> iced::widget::Text<'static> {
         text(s)
@@ -83,6 +165,14 @@ pub fn device_view<'a>(
     ]
     .spacing(6)
     .align_y(Alignment::Center);
+
+    let conn_summary_row = row![
+        text(conn_summary)
+            .size(11)
+            .style(|_: &iced::Theme| text::Style {
+                color: Some(Color::from_rgb(0.75, 0.75, 0.75)),
+            }),
+    ];
 
     // Position and jog
     let pos_row = row![
@@ -188,12 +278,24 @@ pub fn device_view<'a>(
     let mut main_col = column![
         profile_row,
         conn_row,
+        conn_summary_row,
         pos_row,
         jog_row,
         job_row,
     ]
     .spacing(4)
     .padding(4);
+
+    if let Some(vs) = vevor_status_row {
+        main_col = main_col.push(vs);
+    }
+
+    // Modular device-specific controls
+    if profile.device_type == DeviceType::VevorSmart1 {
+        main_col = main_col.push(
+            crate::device::vevor::controls_view(connected, vevor_last_status)
+        );
+    }
 
     if let Some(bar) = progress {
         main_col = main_col.push(bar);

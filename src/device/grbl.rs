@@ -105,6 +105,12 @@ pub fn spawn() -> (Sender<DeviceCommand>, Receiver<DeviceEvent>) {
                             let _ = p.write_all(b"?");
                         }
                     }
+
+                    DeviceCommand::SendRaw(cmd) => {
+                        if let Some(ref mut p) = port {
+                            let _ = p.write_all(cmd.as_bytes());
+                        }
+                    }
                 }
 
                 // Drive the job and read responses

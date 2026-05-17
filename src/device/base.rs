@@ -23,6 +23,8 @@ pub enum DeviceCommand {
     Connect { port: String, baud_rate: u32 },
     Disconnect,
     SendJob(Vec<String>),
+    /// Send a raw ASCII command string directly to the device (no line ending added).
+    SendRaw(String),
     FeedHold,
     CycleStart,
     SoftReset,

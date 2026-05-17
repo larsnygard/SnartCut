@@ -206,11 +206,137 @@ impl Default for VisualConfig {
 }
 
 /// A named device profile (port + baud + type + work area).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum DeviceConnection {
+    #[default]
+    Serial,
+    Usb,
+    Wifi,
+    Bluetooth,
+}
+
+impl DeviceConnection {
+    pub fn all() -> &'static [Self] {
+        &[Self::Serial, Self::Usb, Self::Wifi, Self::Bluetooth]
+    }
+}
+
+impl std::fmt::Display for DeviceConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Serial => "Serial",
+            Self::Usb => "USB",
+            Self::Wifi => "Wi-Fi",
+            Self::Bluetooth => "Bluetooth",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SerialParity {
+    #[default]
+    None,
+    Even,
+    Odd,
+}
+
+impl SerialParity {
+    pub fn all() -> &'static [Self] {
+        &[Self::None, Self::Even, Self::Odd]
+    }
+}
+
+impl std::fmt::Display for SerialParity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "None",
+            Self::Even => "Even",
+            Self::Odd => "Odd",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SerialFlowControl {
+    #[default]
+    None,
+    Hardware,
+    Software,
+}
+
+impl SerialFlowControl {
+    pub fn all() -> &'static [Self] {
+        &[Self::None, Self::Hardware, Self::Software]
+    }
+}
+
+impl std::fmt::Display for SerialFlowControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "None",
+            Self::Hardware => "Hardware",
+            Self::Software => "Software",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum WifiTargetType {
+    #[default]
+    IpAddress,
+    Hostname,
+    Url,
+}
+
+impl WifiTargetType {
+    pub fn all() -> &'static [Self] {
+        &[Self::IpAddress, Self::Hostname, Self::Url]
+    }
+}
+
+impl std::fmt::Display for WifiTargetType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::IpAddress => "IP Address",
+            Self::Hostname => "Hostname",
+            Self::Url => "URL",
+        })
+    }
+}
+
+fn default_serial_data_bits() -> u8 {
+    8
+}
+
+fn default_serial_stop_bits() -> u8 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DeviceProfile {
     pub name: String,
+    #[serde(default)]
+    pub connection: DeviceConnection,
+    /// Primary serial port / path.
     pub port: String,
+    /// Primary serial baud rate.
     pub baud_rate: u32,
+    #[serde(default = "default_serial_data_bits")]
+    pub serial_data_bits: u8,
+    #[serde(default)]
+    pub serial_parity: SerialParity,
+    #[serde(default = "default_serial_stop_bits")]
+    pub serial_stop_bits: u8,
+    #[serde(default)]
+    pub serial_flow_control: SerialFlowControl,
+    #[serde(default)]
+    pub usb_device: String,
+    #[serde(default)]
+    pub wifi_target: String,
+    #[serde(default)]
+    pub wifi_target_type: WifiTargetType,
+    #[serde(default)]
+    pub bluetooth_device: String,
     pub device_type: DeviceType,
     /// Work-area width in millimetres.
     pub work_area_w: f64,
@@ -222,8 +348,17 @@ impl DeviceProfile {
     pub fn new_default() -> Self {
         Self {
             name: "Default".to_owned(),
+            connection: DeviceConnection::Serial,
             port: String::new(),
             baud_rate: 115200,
+            serial_data_bits: default_serial_data_bits(),
+            serial_parity: SerialParity::None,
+            serial_stop_bits: default_serial_stop_bits(),
+            serial_flow_control: SerialFlowControl::None,
+            usb_device: String::new(),
+            wifi_target: String::new(),
+            wifi_target_type: WifiTargetType::IpAddress,
+            bluetooth_device: String::new(),
             device_type: DeviceType::GrblLaser,
             work_area_w: 400.0,
             work_area_h: 400.0,
